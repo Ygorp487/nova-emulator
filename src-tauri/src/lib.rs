@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
+use tauri::Manager;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -17,42 +18,65 @@ struct EngineState {
     acceleration: String,
 }
 
-fn project_root() -> PathBuf {
+fn dev_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn runtime_root(app: &tauri::AppHandle) -> PathBuf {
     if cfg!(debug_assertions) {
-        return PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+        return dev_root().join("engine").join("runtime");
     }
 
-    std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+    app.path()
+        .app_local_data_dir()
+        .unwrap_or_else(|_| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|path| path.parent().map(Path::to_path_buf))
+                .unwrap_or_else(|| PathBuf::from("."))
+        })
+        .join("engine")
+        .join("runtime")
 }
 
-fn sdk_root(root: &Path) -> PathBuf {
-    root.join("engine").join("runtime").join("sdk")
+fn script_path(app: &tauri::AppHandle, name: &str) -> PathBuf {
+    if cfg!(debug_assertions) {
+        return dev_root().join("engine").join("scripts").join(name);
+    }
+
+    app.path()
+        .resource_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("engine")
+        .join("scripts")
+        .join(name)
 }
 
-fn emulator_path(root: &Path) -> PathBuf {
-    sdk_root(root).join("emulator").join("emulator.exe")
+fn sdk_root(runtime: &Path) -> PathBuf {
+    runtime.join("sdk")
 }
 
-fn adb_path(root: &Path) -> PathBuf {
-    sdk_root(root).join("platform-tools").join("adb.exe")
+fn emulator_path(runtime: &Path) -> PathBuf {
+    sdk_root(runtime).join("emulator").join("emulator.exe")
 }
 
-fn avd_home(root: &Path) -> PathBuf {
-    root.join("engine").join("runtime").join("avd")
+fn adb_path(runtime: &Path) -> PathBuf {
+    sdk_root(runtime).join("platform-tools").join("adb.exe")
 }
 
-fn avd_exists(root: &Path) -> bool {
-    avd_home(root).join("NOVA.avd").join("config.ini").exists()
+fn avd_home(runtime: &Path) -> PathBuf {
+    runtime.join("avd")
 }
 
-fn acceleration_status(root: &Path) -> String {
-    let emulator = emulator_path(root);
+fn avd_exists(runtime: &Path) -> bool {
+    avd_home(runtime).join("NOVA.avd").join("config.ini").exists()
+}
+
+fn acceleration_status(runtime: &Path) -> String {
+    let emulator = emulator_path(runtime);
     if !emulator.exists() {
         return "runtime não instalado".into();
     }
@@ -72,8 +96,8 @@ fn acceleration_status(root: &Path) -> String {
     }
 }
 
-fn adb_output(root: &Path, args: &[&str]) -> Option<String> {
-    let adb = adb_path(root);
+fn adb_output(runtime: &Path, args: &[&str]) -> Option<String> {
+    let adb = adb_path(runtime);
     if !adb.exists() {
         return None;
     }
@@ -86,44 +110,44 @@ fn adb_output(root: &Path, args: &[&str]) -> Option<String> {
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn android_running(root: &Path) -> bool {
-    adb_output(root, &["-s", "emulator-5554", "get-state"])
+fn android_running(runtime: &Path) -> bool {
+    adb_output(runtime, &["-s", "emulator-5554", "get-state"])
         .map(|state| state.eq_ignore_ascii_case("device"))
         .unwrap_or(false)
 }
 
-fn boot_complete(root: &Path) -> bool {
-    if !android_running(root) {
+fn boot_complete(runtime: &Path) -> bool {
+    if !android_running(runtime) {
         return false;
     }
 
     adb_output(
-        root,
+        runtime,
         &["-s", "emulator-5554", "shell", "getprop", "sys.boot_completed"],
     )
     .map(|value| value == "1")
     .unwrap_or(false)
 }
 
-fn android_version(root: &Path) -> Option<String> {
+fn android_version(runtime: &Path) -> Option<String> {
     adb_output(
-        root,
+        runtime,
         &["-s", "emulator-5554", "shell", "getprop", "ro.build.version.release"],
     )
 }
 
-fn collect_state() -> EngineState {
-    let root = project_root();
-    let runtime_found = emulator_path(&root).exists();
-    let adb_found = adb_path(&root).exists();
-    let avd_found = avd_exists(&root);
-    let running = android_running(&root);
-    let boot_complete = boot_complete(&root);
-    let acceleration = acceleration_status(&root);
+fn collect_state(app: &tauri::AppHandle) -> EngineState {
+    let runtime = runtime_root(app);
+    let runtime_found = emulator_path(&runtime).exists();
+    let adb_found = adb_path(&runtime).exists();
+    let avd_found = avd_exists(&runtime);
+    let running = android_running(&runtime);
+    let boot_complete = boot_complete(&runtime);
+    let acceleration = acceleration_status(&runtime);
     let acceleration_ok = acceleration.to_ascii_lowercase().contains("usable");
 
     if running && boot_complete {
-        let version = android_version(&root).unwrap_or_else(|| "Android".into());
+        let version = android_version(&runtime).unwrap_or_else(|| "Android".into());
         return EngineState {
             state: "running".into(),
             message: format!("Android {version} está pronto e conectado via ADB."),
@@ -188,30 +212,45 @@ fn collect_state() -> EngineState {
 }
 
 #[tauri::command]
-fn engine_status() -> EngineState {
-    collect_state()
+fn engine_status(app: tauri::AppHandle) -> EngineState {
+    collect_state(&app)
 }
 
 #[tauri::command]
-fn install_runtime() -> EngineState {
-    let root = project_root();
-    let script = root.join("engine").join("scripts").join("install-runtime.ps1");
+fn install_runtime(app: tauri::AppHandle) -> EngineState {
+    let runtime = runtime_root(&app);
+    let script = script_path(&app, "install-runtime.ps1");
+
+    if !script.exists() {
+        return EngineState {
+            state: "error".into(),
+            message: format!("Script do runtime não encontrado: {}", script.display()),
+            runtime_found: false,
+            adb_found: false,
+            avd_found: false,
+            running: false,
+            boot_complete: false,
+            acceleration: "indisponível".into(),
+        };
+    }
 
     let spawn_result = Command::new("powershell.exe")
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(script)
+        .arg("-RuntimeRoot")
+        .arg(&runtime)
         .spawn();
 
     match spawn_result {
         Ok(_) => EngineState {
             state: "installing".into(),
             message: "Instalador aberto. Ele baixará o runtime oficial e pedirá sua aceitação das licenças do Android SDK.".into(),
-            runtime_found: emulator_path(&root).exists(),
-            adb_found: adb_path(&root).exists(),
-            avd_found: avd_exists(&root),
+            runtime_found: emulator_path(&runtime).exists(),
+            adb_found: adb_path(&runtime).exists(),
+            avd_found: avd_exists(&runtime),
             running: false,
             boot_complete: false,
-            acceleration: acceleration_status(&root),
+            acceleration: acceleration_status(&runtime),
         },
         Err(error) => EngineState {
             state: "error".into(),
@@ -227,9 +266,9 @@ fn install_runtime() -> EngineState {
 }
 
 #[tauri::command]
-fn start_engine(profile: String) -> EngineState {
-    let root = project_root();
-    let current = collect_state();
+fn start_engine(app: tauri::AppHandle, profile: String) -> EngineState {
+    let runtime = runtime_root(&app);
+    let current = collect_state(&app);
     if current.state != "ready" && current.state != "running" && current.state != "starting" {
         return current;
     }
@@ -238,12 +277,27 @@ fn start_engine(profile: String) -> EngineState {
         return current;
     }
 
-    let script = root.join("engine").join("scripts").join("start-engine.ps1");
+    let script = script_path(&app, "start-engine.ps1");
+    if !script.exists() {
+        return EngineState {
+            state: "error".into(),
+            message: format!("Script do engine não encontrado: {}", script.display()),
+            runtime_found: true,
+            adb_found: true,
+            avd_found: true,
+            running: false,
+            boot_complete: false,
+            acceleration: acceleration_status(&runtime),
+        };
+    }
+
     match Command::new("powershell.exe")
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(script)
         .arg("-Profile")
         .arg(profile)
+        .arg("-RuntimeRoot")
+        .arg(&runtime)
         .spawn()
     {
         Ok(_) => EngineState {
@@ -254,7 +308,7 @@ fn start_engine(profile: String) -> EngineState {
             avd_found: true,
             running: false,
             boot_complete: false,
-            acceleration: acceleration_status(&root),
+            acceleration: acceleration_status(&runtime),
         },
         Err(error) => EngineState {
             state: "error".into(),
@@ -264,21 +318,21 @@ fn start_engine(profile: String) -> EngineState {
             avd_found: true,
             running: false,
             boot_complete: false,
-            acceleration: acceleration_status(&root),
+            acceleration: acceleration_status(&runtime),
         },
     }
 }
 
 #[tauri::command]
-fn stop_engine() -> EngineState {
-    let root = project_root();
-    let adb = adb_path(&root);
+fn stop_engine(app: tauri::AppHandle) -> EngineState {
+    let runtime = runtime_root(&app);
+    let adb = adb_path(&runtime);
     if adb.exists() {
         let _ = Command::new(adb)
             .args(["-s", "emulator-5554", "emu", "kill"])
             .output();
     }
-    collect_state()
+    collect_state(&app)
 }
 
 pub fn run() {
