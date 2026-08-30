@@ -2,14 +2,18 @@ param(
   [ValidateRange(34, 36)]
   [int]$ApiLevel = 35,
   [ValidateSet('default','google_apis')]
-  [string]$ImageFlavor = 'default'
+  [string]$ImageFlavor = 'default',
+  [string]$RuntimeRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$RuntimeRoot = Join-Path $RepoRoot 'engine\runtime'
+if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) {
+  $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+  $RuntimeRoot = Join-Path $RepoRoot 'engine\runtime'
+}
+
 $SdkRoot = Join-Path $RuntimeRoot 'sdk'
 $AvdHome = Join-Path $RuntimeRoot 'avd'
 $Downloads = Join-Path $RuntimeRoot 'downloads'
@@ -27,10 +31,10 @@ function Find-Java {
   $existing = Get-Command java.exe -ErrorAction SilentlyContinue
   if ($existing) { return $existing.Source }
 
-  Write-Host '[NOVA] Java 17 não encontrado. Tentando instalar Microsoft OpenJDK 17 via winget...' -ForegroundColor Cyan
+  Write-Host '[NOVA] Java 17 não encontrado. Instalando Microsoft OpenJDK 17...' -ForegroundColor Cyan
   $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
   if (-not $winget) {
-    throw 'Java 17 é necessário e o winget não está disponível. Instale Microsoft OpenJDK 17 e execute novamente.'
+    throw 'Java 17 é necessário. O Windows Package Manager (winget) não foi encontrado.'
   }
 
   & $winget.Source install -e --id Microsoft.OpenJDK.17 --silent --accept-package-agreements --accept-source-agreements
@@ -45,7 +49,7 @@ function Find-Java {
   )
   $java = $javaCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
   if (-not $java) {
-    throw 'Java 17 foi instalado, mas java.exe não foi localizado. Feche e abra o instalador novamente.'
+    throw 'Java 17 foi instalado, mas java.exe não foi localizado. Reabra o NOVA e tente novamente.'
   }
   return $java
 }
@@ -70,6 +74,7 @@ $JavaExe = Find-Java
 $env:JAVA_HOME = Split-Path -Parent (Split-Path -Parent $JavaExe)
 $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
 Write-Host "[NOVA] Java: $JavaExe" -ForegroundColor DarkGray
+Write-Host "[NOVA] Runtime: $RuntimeRoot" -ForegroundColor DarkGray
 
 $SdkManager = Join-Path $SdkRoot 'cmdline-tools\latest\bin\sdkmanager.bat'
 if (-not (Test-Path $SdkManager)) {
