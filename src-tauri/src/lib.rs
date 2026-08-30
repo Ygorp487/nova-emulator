@@ -13,11 +13,22 @@ struct EngineState {
     adb_found: bool,
     avd_found: bool,
     running: bool,
+    boot_complete: bool,
     acceleration: String,
 }
 
 fn project_root() -> PathBuf {
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    if cfg!(debug_assertions) {
+        return PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+    }
+
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
 fn sdk_root(root: &Path) -> PathBuf {
@@ -61,20 +72,44 @@ fn acceleration_status(root: &Path) -> String {
     }
 }
 
-fn android_running(root: &Path) -> bool {
+fn adb_output(root: &Path, args: &[&str]) -> Option<String> {
     let adb = adb_path(root);
     if !adb.exists() {
-        return false;
+        return None;
     }
 
     Command::new(adb)
-        .args(["-s", "emulator-5554", "get-state"])
+        .args(args)
         .output()
-        .map(|output| {
-            output.status.success()
-                && String::from_utf8_lossy(&output.stdout).trim().eq_ignore_ascii_case("device")
-        })
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn android_running(root: &Path) -> bool {
+    adb_output(root, &["-s", "emulator-5554", "get-state"])
+        .map(|state| state.eq_ignore_ascii_case("device"))
         .unwrap_or(false)
+}
+
+fn boot_complete(root: &Path) -> bool {
+    if !android_running(root) {
+        return false;
+    }
+
+    adb_output(
+        root,
+        &["-s", "emulator-5554", "shell", "getprop", "sys.boot_completed"],
+    )
+    .map(|value| value == "1")
+    .unwrap_or(false)
+}
+
+fn android_version(root: &Path) -> Option<String> {
+    adb_output(
+        root,
+        &["-s", "emulator-5554", "shell", "getprop", "ro.build.version.release"],
+    )
 }
 
 fn collect_state() -> EngineState {
@@ -83,17 +118,33 @@ fn collect_state() -> EngineState {
     let adb_found = adb_path(&root).exists();
     let avd_found = avd_exists(&root);
     let running = android_running(&root);
+    let boot_complete = boot_complete(&root);
     let acceleration = acceleration_status(&root);
     let acceleration_ok = acceleration.to_ascii_lowercase().contains("usable");
 
-    if running {
+    if running && boot_complete {
+        let version = android_version(&root).unwrap_or_else(|| "Android".into());
         return EngineState {
             state: "running".into(),
-            message: "Android NOVA está ativo e conectado via ADB.".into(),
+            message: format!("Android {version} está pronto e conectado via ADB."),
             runtime_found,
             adb_found,
             avd_found,
             running,
+            boot_complete,
+            acceleration,
+        };
+    }
+
+    if running {
+        return EngineState {
+            state: "starting".into(),
+            message: "Emulador conectado via ADB; o Android ainda está concluindo o boot.".into(),
+            runtime_found,
+            adb_found,
+            avd_found,
+            running,
+            boot_complete,
             acceleration,
         };
     }
@@ -101,11 +152,12 @@ fn collect_state() -> EngineState {
     if !runtime_found || !adb_found || !avd_found {
         return EngineState {
             state: "runtime_missing".into(),
-            message: "Runtime incompleto. Use Instalar Runtime para baixar o Android/QEMU oficial e criar o AVD NOVA.".into(),
+            message: "Runtime incompleto. Use Instalar Runtime para baixar o Android Emulator/QEMU oficial e criar o AVD NOVA.".into(),
             runtime_found,
             adb_found,
             avd_found,
             running,
+            boot_complete,
             acceleration,
         };
     }
@@ -118,6 +170,7 @@ fn collect_state() -> EngineState {
             adb_found,
             avd_found,
             running,
+            boot_complete,
             acceleration,
         };
     }
@@ -129,6 +182,7 @@ fn collect_state() -> EngineState {
         adb_found,
         avd_found,
         running,
+        boot_complete,
         acceleration,
     }
 }
@@ -156,6 +210,7 @@ fn install_runtime() -> EngineState {
             adb_found: adb_path(&root).exists(),
             avd_found: avd_exists(&root),
             running: false,
+            boot_complete: false,
             acceleration: acceleration_status(&root),
         },
         Err(error) => EngineState {
@@ -165,6 +220,7 @@ fn install_runtime() -> EngineState {
             adb_found: false,
             avd_found: false,
             running: false,
+            boot_complete: false,
             acceleration: "indisponível".into(),
         },
     }
@@ -174,11 +230,11 @@ fn install_runtime() -> EngineState {
 fn start_engine(profile: String) -> EngineState {
     let root = project_root();
     let current = collect_state();
-    if current.state != "ready" && current.state != "running" {
+    if current.state != "ready" && current.state != "running" && current.state != "starting" {
         return current;
     }
 
-    if current.running {
+    if current.boot_complete {
         return current;
     }
 
@@ -192,11 +248,12 @@ fn start_engine(profile: String) -> EngineState {
     {
         Ok(_) => EngineState {
             state: "starting".into(),
-            message: "Android está iniciando. O primeiro boot pode demorar mais; os próximos usam os dados do AVD.".into(),
+            message: "Android está iniciando. O NOVA vai acompanhar o ADB até o boot terminar.".into(),
             runtime_found: true,
             adb_found: true,
             avd_found: true,
             running: false,
+            boot_complete: false,
             acceleration: acceleration_status(&root),
         },
         Err(error) => EngineState {
@@ -206,6 +263,7 @@ fn start_engine(profile: String) -> EngineState {
             adb_found: true,
             avd_found: true,
             running: false,
+            boot_complete: false,
             acceleration: acceleration_status(&root),
         },
     }
