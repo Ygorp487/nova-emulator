@@ -1,13 +1,16 @@
 {
-  "machine": "q35",
+  "runtime": "android-emulator-qemu",
+  "apiLevel": 35,
+  "imageFlavor": "default",
+  "architecture": "x86_64",
   "accelerator": "whpx",
-  "cpu": "host",
   "cpuCores": 4,
   "memoryMb": 4096,
   "resolution": "1920x1080",
   "density": 240,
-  "fpsLimit": 60,
-  "gpu": "hardware",
-  "adbPort": 5555,
-  "snapshot": true
+  "fpsTarget": 60,
+  "gpu": "host",
+  "consolePort": 5554,
+  "snapshot": true,
+  "armTranslation": false
 }

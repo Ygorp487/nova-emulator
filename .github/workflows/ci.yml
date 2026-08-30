@@ -22,6 +22,14 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Validate PowerShell syntax
+        shell: pwsh
+        run: |
+          Get-ChildItem engine/scripts/*.ps1 | ForEach-Object {
+            [void][scriptblock]::Create((Get-Content $_.FullName -Raw))
+            Write-Host "Parsed $($_.Name)"
+          }
+
       - name: Install frontend dependencies
         run: npm install
 

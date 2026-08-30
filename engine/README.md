@@ -1,14 +1,24 @@
 # NOVA Engine
 
-This folder contains only configuration and orchestration code. Large third-party/runtime binaries are not stored in Git.
+The NOVA engine is provisioned locally and third-party binaries are not committed to Git.
 
-Expected runtime layout:
+## Runtime layout
 
 ```text
 engine/runtime/
-  qemu/qemu-system-x86_64.exe
-  android/system.img
-  android/userdata.qcow2
+  sdk/
+    emulator/emulator.exe
+    platform-tools/adb.exe
+    system-images/android-35/default/x86_64/
+  avd/
+    NOVA.ini
+    NOVA.avd/
 ```
 
-The Windows launcher targets WHPX acceleration. The provisioning milestone will validate Windows Hypervisor Platform, download verified runtime components, create userdata storage and expose ADB to the desktop shell.
+`install-runtime.ps1` downloads the official Android command-line tools, verifies the pinned SHA-256, asks the user to accept the Android SDK licenses, installs Emulator/QEMU + ADB + an Android 15 x86_64 system image, and creates the `NOVA` AVD.
+
+The launcher uses Windows Hypervisor Platform acceleration and GPU acceleration when available.
+
+## Important limitation
+
+The current MVP is x86_64-only and does not include ARM binary translation. Apps/games that ship only ARM native code may not run yet. ARM compatibility is a separate engine milestone.
