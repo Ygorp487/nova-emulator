@@ -5,9 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
-  build-check:
+  windows-build:
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -24,7 +25,7 @@ jobs:
       - name: Validate PowerShell syntax
         shell: pwsh
         run: |
-          Get-ChildItem engine/scripts/*.ps1 | ForEach-Object {
+          Get-ChildItem engine/scripts/*.ps1, tools/*.ps1, setup-dev.ps1 | ForEach-Object {
             [void][scriptblock]::Create((Get-Content $_.FullName -Raw))
             Write-Host "Parsed $($_.Name)"
           }
@@ -32,9 +33,13 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      - name: Build frontend
-        run: npm run build
+      - name: Build Windows NSIS installer
+        run: npm run tauri build -- --bundles nsis
 
-      - name: Check Rust backend
-        working-directory: src-tauri
-        run: cargo check
+      - name: Upload NOVA Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: NOVA-Windows-Setup
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 14
