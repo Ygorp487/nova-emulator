@@ -8,6 +8,7 @@ type EngineState = {
   adbFound: boolean;
   avdFound: boolean;
   running: boolean;
+  bootComplete: boolean;
   acceleration: string;
 };
 
@@ -29,6 +30,7 @@ export default function App() {
     adbFound: false,
     avdFound: false,
     running: false,
+    bootComplete: false,
     acceleration: "verificando"
   });
   const [profile, setProfile] = useState("Balanced");
@@ -38,7 +40,7 @@ export default function App() {
     try {
       setEngine(await invoke<EngineState>("engine_status"));
     } catch (error) {
-      setEngine((current) => ({ ...current, state: "error", message: String(error), running: false }));
+      setEngine((current) => ({ ...current, state: "error", message: String(error), running: false, bootComplete: false }));
     }
   }
 
@@ -57,7 +59,7 @@ export default function App() {
     setBusy(true);
     try {
       setEngine(await invoke<EngineState>("start_engine", { profile: profile.toLowerCase() }));
-      window.setTimeout(() => void refreshStatus(), 5000);
+      window.setTimeout(() => void refreshStatus(), 2500);
     } catch (error) {
       setEngine((current) => ({ ...current, state: "error", message: String(error) }));
     } finally {
@@ -76,14 +78,14 @@ export default function App() {
 
   useEffect(() => {
     void refreshStatus();
-    const timer = window.setInterval(() => void refreshStatus(), 8000);
+    const timer = window.setInterval(() => void refreshStatus(), 4000);
     return () => window.clearInterval(timer);
   }, []);
 
   const primaryLabel = !engine.runtimeFound
     ? "⬇ INSTALAR RUNTIME"
     : engine.running
-      ? "■ PARAR ANDROID"
+      ? engine.bootComplete ? "■ PARAR ANDROID" : "■ CANCELAR BOOT"
       : busy
         ? "PROCESSANDO..."
         : "▶ INICIAR ANDROID";
@@ -93,6 +95,14 @@ export default function App() {
     : engine.running
       ? stopEngine
       : startEngine;
+
+  const heroTitle = engine.bootComplete
+    ? "Android pronto"
+    : engine.state === "starting"
+      ? "Android iniciando"
+      : engine.runtimeFound
+        ? "Engine preparado"
+        : "Instale o runtime";
 
   return (
     <div className="app-shell">
@@ -106,7 +116,7 @@ export default function App() {
           <button className="nav-item"><span>⚙</span>Configurações</button>
         </nav>
         <div className="sidebar-bottom">
-          <div className="engine-pill"><StatusDot active={engine.running} /><div><b>Engine</b><small>{engine.running ? "Android online" : engine.runtimeFound ? "Runtime instalado" : "Runtime ausente"}</small></div></div>
+          <div className="engine-pill"><StatusDot active={engine.bootComplete} /><div><b>Engine</b><small>{engine.bootComplete ? "Android pronto" : engine.running ? "Inicializando Android" : engine.runtimeFound ? "Runtime instalado" : "Runtime ausente"}</small></div></div>
           <span className="version">NOVA 0.2.0 · ENGINE MVP</span>
         </div>
       </aside>
@@ -119,8 +129,8 @@ export default function App() {
 
         <section className="hero-card">
           <div className="hero-copy">
-            <span className="badge"><StatusDot active={engine.running || engine.state === "ready"} /> {engine.state.replaceAll("_", " ")}</span>
-            <h2>{engine.running ? "Android em execução" : engine.runtimeFound ? "Engine preparado" : "Instale o runtime"}</h2>
+            <span className="badge"><StatusDot active={engine.bootComplete || engine.state === "ready"} /> {engine.state.replaceAll("_", " ")}</span>
+            <h2>{heroTitle}</h2>
             <p>{engine.message}</p>
             <div className="hero-actions">
               <button className="primary" onClick={() => void primaryAction()} disabled={busy || engine.state === "acceleration_missing"}>{primaryLabel}</button>
@@ -129,7 +139,7 @@ export default function App() {
             <p className="eyebrow">WHPX: {engine.acceleration}</p>
           </div>
           <div className="device-stage">
-            <div className="phone"><div className="camera"/><div className="android-orb">N</div><strong>NOVA Android</strong><small>Android 15 · x86_64</small></div>
+            <div className="phone"><div className="camera"/><div className="android-orb">N</div><strong>NOVA Android</strong><small>{engine.bootComplete ? "Sistema pronto · ADB conectado" : "Android 15 · x86_64"}</small></div>
             <div className="glow"/>
           </div>
         </section>
