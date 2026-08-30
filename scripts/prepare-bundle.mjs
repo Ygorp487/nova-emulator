@@ -5,7 +5,7 @@ import path from 'node:path';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const sourceScripts = path.join(root, 'engine', 'scripts');
-const resourceScripts = path.join(root, 'src-tauri', 'resources', 'engine', 'scripts');
+const resourceScripts = path.join(root, 'src-tauri', 'engine', 'scripts');
 const iconsDir = path.join(root, 'src-tauri', 'icons');
 
 await mkdir(resourceScripts, { recursive: true });
