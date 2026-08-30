@@ -32,7 +32,7 @@ if ($LASTEXITCODE -eq 0 -and $existing.Trim() -eq 'device') {
 }
 
 $accelOutput = & $Emulator -accel-check 2>&1 | Out-String
-if ($LASTEXITCODE -ne 0 -or $accelOutput -notmatch '(?i)(usable|WHPX)') {
+if ($LASTEXITCODE -ne 0 -or $accelOutput -notmatch '(?i)usable') {
   throw "Aceleração de hardware indisponível. Resultado: $accelOutput"
 }
 
@@ -48,5 +48,5 @@ $args = @(
   '-netspeed', 'full'
 )
 
-Write-Host "[NOVA] Iniciando perfil $Profile: $($settings.Cpu) cores / $($settings.Ram) MB / GPU $($settings.Gpu)" -ForegroundColor Cyan
+Write-Host "[NOVA] Iniciando perfil ${Profile}: $($settings.Cpu) cores / $($settings.Ram) MB / GPU $($settings.Gpu)" -ForegroundColor Cyan
 Start-Process -FilePath $Emulator -ArgumentList $args -WorkingDirectory $RepoRoot
