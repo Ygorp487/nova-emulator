@@ -41,7 +41,7 @@ try {
         if ((Test-Path $OutFile) -and (Get-Item $OutFile).Length -gt 0) { return }
       } catch {
         if ($try -eq $Attempts) { throw }
-        Write-Host "[NOVA] Download falhou. Tentando novamente em 2 segundos..." -ForegroundColor Yellow
+        Write-Host '[NOVA] Download falhou. Tentando novamente em 2 segundos...' -ForegroundColor Yellow
         Start-Sleep -Seconds 2
       }
     }
@@ -166,18 +166,14 @@ try {
 
   Write-Host '[NOVA] Verificando aceleração de hardware...' -ForegroundColor Cyan
   $accelOutput = & $Emulator -accel-check 2>&1 | Out-String
+  $accelExitCode = $LASTEXITCODE
   Write-Host $accelOutput
 
-  if ($LASTEXITCODE -ne 0 -or $accelOutput -notmatch '(?i)usable') {
-    Write-Host '[NOVA] O runtime foi instalado, mas WHPX ainda não está utilizável.' -ForegroundColor Yellow
-    $EnableScript = Join-Path $PSScriptRoot 'enable-whpx.ps1'
-    if (Test-Path $EnableScript) {
-      $answer = Read-Host 'Ativar Windows Hypervisor Platform agora? (s/N)'
-      if ($answer -match '^(s|sim|y|yes)$') {
-        Start-Process powershell.exe -Verb RunAs -Wait -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$EnableScript`"")
-        Write-Host '[NOVA] Se o Windows pedir reinicialização, reinicie o PC antes de iniciar o Android.' -ForegroundColor Yellow
-      }
-    }
+  if ($accelExitCode -ne 0) {
+    Write-Host '[NOVA] O Android Emulator informou que a aceleração não está disponível.' -ForegroundColor Yellow
+    Write-Host '[NOVA] Se VT-x/AMD-V, WHPX e o hypervisor já estiverem ativos, não tente reinstalar o runtime; use o diagnóstico do NOVA.' -ForegroundColor Yellow
+  } else {
+    Write-Host '[OK] Aceleração de hardware confirmada pelo Android Emulator.' -ForegroundColor Green
   }
 
   Write-Host ''
