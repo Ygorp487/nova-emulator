@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "prepare:bundle": "node scripts/prepare-bundle.mjs",
+    "prepare:bundle": "node scripts/prepare-bundle.mjs && node scripts/create-windows-icon.mjs",
     "build": "npm run prepare:bundle && tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri"
