@@ -30,7 +30,7 @@
     "active": true,
     "targets": ["nsis"],
     "shortDescription": "Lightweight Android emulator for Windows",
-    "resources": ["resources/**/*"],
+    "resources": ["engine/scripts/*"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
