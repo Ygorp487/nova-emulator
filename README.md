@@ -1,56 +1,84 @@
 # NOVA Emulator
 
-NOVA is an experimental lightweight Android emulator shell for Windows focused on low overhead, gaming-oriented controls and a clean desktop experience.
+NOVA is an experimental lightweight Android emulator for Windows focused on low overhead, gaming-oriented controls and a clean desktop experience.
 
-## Current milestone: Engine MVP 0.2
+## Jeito mais fácil — ZIP
+
+Baixe o repositório como ZIP, extraia a pasta e use um destes arquivos:
+
+### `NOVA-INSTALAR-E-ABRIR.bat`
+
+Dê dois cliques. O assistente verifica o PC e instala automaticamente, quando necessário:
+
+- Node.js LTS
+- Rust / Cargo
+- Visual C++ Build Tools
+- Microsoft Edge WebView2 Runtime
+- dependências npm do NOVA
+
+Depois ele compila a versão de desenvolvimento e abre o NOVA.
+
+### `NOVA-GERAR-EXE.bat`
+
+Dê dois cliques para verificar/instalar as mesmas dependências e gerar o instalador do Windows.
+
+O resultado fica em:
+
+```text
+NOVA-BUILD\NOVA-Setup.exe
+```
+
+O Windows pode pedir permissão de administrador para instalar componentes do sistema.
+
+## Instalador gerado pelo GitHub
+
+O workflow `NOVA CI` também compila um instalador NSIS no Windows e publica o artefato `NOVA-Windows-Setup` nas execuções do GitHub Actions.
+
+## Engine MVP 0.2
 
 - Tauri + React desktop shell
 - Rust backend commands
-- Local runtime provisioning without Android Studio
-- Official Android Emulator/QEMU runtime
-- Windows Hypervisor Platform (WHPX) validation
-- Android 15 / API 35 x86_64 AVD creation
+- runtime Android instalado fora de `Program Files`, em uma pasta gravável do usuário
+- Android Emulator/QEMU + ADB
+- Windows Hypervisor Platform (WHPX)
+- Android 15 / API 35 x86_64 AVD
 - GPU acceleration (`host` / `auto` profiles)
-- ADB health detection
-- Start/stop controls from the NOVA launcher
-- Windows CI build validation
+- ADB + `sys.boot_completed` health detection
+- start/stop pelo launcher NOVA
+- scripts do engine embutidos no instalador Windows
 
-The runtime is **not** stored in Git. It is installed locally under `engine/runtime/`.
+## Primeiro uso do Android
 
-## Development
+Depois de abrir o NOVA, clique em **Instalar Runtime**. Essa etapa baixa as ferramentas Android necessárias, cria o AVD NOVA e verifica a aceleração de hardware.
 
-Requirements:
+O Android SDK exige que as licenças sejam apresentadas ao usuário durante a instalação. Se WHPX estiver desativado, o NOVA pode abrir o script incluído para ativar Windows Hypervisor Platform; uma reinicialização do Windows pode ser necessária.
 
-- Windows 10/11 x64
-- Node.js 22+
-- Rust stable
-- Tauri v2 Windows prerequisites
-- CPU virtualization enabled in BIOS/UEFI
+## Desenvolvimento manual
+
+O fluxo antigo continua disponível:
 
 ```powershell
 .\setup-dev.ps1
 npm run tauri dev
 ```
 
-Inside NOVA, click **Instalar Runtime**. The installer downloads the Android command-line tools from Google, verifies their SHA-256, asks you to accept the Android SDK licenses, installs Emulator + Platform Tools + Android x86_64 image, creates the NOVA AVD and checks hardware acceleration.
+Mas normalmente basta usar `NOVA-INSTALAR-E-ABRIR.bat`.
 
-If WHPX is disabled, the installer can open the included administrator script to enable Windows Hypervisor Platform. A Windows restart can be required.
-
-## Project structure
+## Estrutura
 
 ```text
-src/                 React launcher UI
-src-tauri/           Rust/Tauri desktop backend
-engine/config/       NOVA engine defaults
-engine/scripts/      Runtime installer and launcher
-engine/runtime/      Downloaded SDK/AVD (gitignored)
-.github/workflows/   Windows build validation
+src/                    React launcher UI
+src-tauri/              Rust/Tauri desktop backend
+engine/config/          configurações do engine
+engine/scripts/         instalador e launcher do Android
+engine/runtime/         SDK/AVD local (gitignored)
+tools/                  bootstrap automático do Windows
+scripts/                preparação dos recursos do instalador
+NOVA-GERAR-EXE.bat      gera NOVA-Setup.exe
+NOVA-INSTALAR-E-ABRIR.bat instala dependências e abre
+.github/workflows/      compilação Windows automática
 ```
 
-## Architecture note
+## Limitação atual
 
-The Android Emulator itself uses QEMU-based virtualization. Using its official runtime for this milestone gives NOVA a correct Android kernel, ramdisk, system image, ADB plumbing and WHPX integration while we build our own launcher, input layer and optimizations around it.
-
-## Known limitation
-
-MVP 0.2 uses an x86_64 Android image and does not yet provide ARM native-code translation. Some Android games ship only ARM libraries and will require a later ARM-compatibility milestone.
+O MVP usa Android x86_64 e ainda não possui tradução nativa de bibliotecas ARM. Alguns jogos Android que só incluem bibliotecas ARM precisarão de uma etapa posterior de compatibilidade ARM.
