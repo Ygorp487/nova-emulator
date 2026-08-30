@@ -36,7 +36,7 @@ try {
   function Invoke-Download([string]$Uri, [string]$OutFile, [int]$Attempts = 3) {
     for ($try = 1; $try -le $Attempts; $try++) {
       try {
-        Write-Host "[NOVA] Download $try/$Attempts: $Uri" -ForegroundColor DarkGray
+        Write-Host ("[NOVA] Download {0}/{1}: {2}" -f $try, $Attempts, $Uri) -ForegroundColor DarkGray
         Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing
         if ((Test-Path $OutFile) -and (Get-Item $OutFile).Length -gt 0) { return }
       } catch {
