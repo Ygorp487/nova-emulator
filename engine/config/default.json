@@ -1,0 +1,13 @@
+{
+  "machine": "q35",
+  "accelerator": "whpx",
+  "cpu": "host",
+  "cpuCores": 4,
+  "memoryMb": 4096,
+  "resolution": "1920x1080",
+  "density": 240,
+  "fpsLimit": 60,
+  "gpu": "hardware",
+  "adbPort": 5555,
+  "snapshot": true
+}
