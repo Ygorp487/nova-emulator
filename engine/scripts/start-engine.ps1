@@ -50,8 +50,9 @@ if (Test-BootComplete) {
 }
 
 $accelOutput = & $Emulator -accel-check 2>&1 | Out-String
-if ($LASTEXITCODE -ne 0 -or $accelOutput -notmatch '(?i)usable') {
-  throw "Aceleração de hardware indisponível. Resultado: $accelOutput"
+$accelExitCode = $LASTEXITCODE
+if ($accelExitCode -ne 0) {
+  throw "O Android Emulator informou que a aceleração de hardware não está disponível. Resultado: $accelOutput"
 }
 
 & $Adb start-server | Out-Null
@@ -69,7 +70,7 @@ $args = @(
   '-netspeed', 'full'
 )
 
-"[$(Get-Date -Format o)] NOVA start profile=$Profile cpu=$($settings.Cpu) ram=$($settings.Ram) gpu=$($settings.Gpu) runtime=$RuntimeRoot" | Set-Content $LogFile -Encoding UTF8
+"[$(Get-Date -Format o)] NOVA start profile=$Profile cpu=$($settings.Cpu) ram=$($settings.Ram) gpu=$($settings.Gpu) runtime=$RuntimeRoot accel_exit=$accelExitCode" | Set-Content $LogFile -Encoding UTF8
 Write-Host "[NOVA] Iniciando perfil ${Profile}: $($settings.Cpu) cores / $($settings.Ram) MB / GPU $($settings.Gpu)" -ForegroundColor Cyan
 
 $process = Start-Process -FilePath $Emulator -ArgumentList $args -WorkingDirectory $RuntimeRoot -PassThru
