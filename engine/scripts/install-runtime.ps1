@@ -128,7 +128,7 @@ Write-Host '[NOVA] Verificando aceleração...' -ForegroundColor Cyan
 $accelOutput = & $Emulator -accel-check 2>&1 | Out-String
 Write-Host $accelOutput
 
-if ($LASTEXITCODE -ne 0 -or $accelOutput -notmatch '(?i)(usable|WHPX)') {
+if ($LASTEXITCODE -ne 0 -or $accelOutput -notmatch '(?i)usable') {
   Write-Host '[NOVA] Windows Hypervisor Platform ainda não parece utilizável.' -ForegroundColor Yellow
   $answer = Read-Host 'Deseja abrir a ativação do WHPX como administrador agora? (s/N)'
   if ($answer -match '^(s|sim|y|yes)$') {
