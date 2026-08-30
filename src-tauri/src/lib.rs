@@ -18,6 +18,11 @@ struct EngineState {
     acceleration: String,
 }
 
+#[derive(Serialize)]
+struct InstalledApp {
+    package: String,
+}
+
 fn dev_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -25,19 +30,11 @@ fn dev_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn runtime_root(app: &tauri::AppHandle) -> PathBuf {
-    if cfg!(debug_assertions) {
-        return dev_root().join("engine").join("runtime");
-    }
-
-    app.path()
-        .app_local_data_dir()
-        .unwrap_or_else(|_| {
-            std::env::current_exe()
-                .ok()
-                .and_then(|path| path.parent().map(Path::to_path_buf))
-                .unwrap_or_else(|| PathBuf::from("."))
-        })
+fn runtime_root() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir())
+        .join("NOVA Emulator")
         .join("engine")
         .join("runtime")
 }
@@ -110,6 +107,27 @@ fn adb_output(runtime: &Path, args: &[&str]) -> Option<String> {
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+fn adb_result(runtime: &Path, args: &[&str]) -> Result<String, String> {
+    let adb = adb_path(runtime);
+    if !adb.exists() {
+        return Err("ADB não encontrado. Execute o preparador do NOVA novamente.".into());
+    }
+
+    let output = Command::new(adb)
+        .args(args)
+        .output()
+        .map_err(|error| format!("Falha ao executar ADB: {error}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+    if output.status.success() {
+        if stdout.is_empty() { Ok(stderr) } else { Ok(stdout) }
+    } else {
+        Err(if stderr.is_empty() { stdout } else { stderr })
+    }
+}
+
 fn android_running(runtime: &Path) -> bool {
     adb_output(runtime, &["-s", "emulator-5554", "get-state"])
         .map(|state| state.eq_ignore_ascii_case("device"))
@@ -136,8 +154,8 @@ fn android_version(runtime: &Path) -> Option<String> {
     )
 }
 
-fn collect_state(app: &tauri::AppHandle) -> EngineState {
-    let runtime = runtime_root(app);
+fn collect_state() -> EngineState {
+    let runtime = runtime_root();
     let runtime_found = emulator_path(&runtime).exists();
     let adb_found = adb_path(&runtime).exists();
     let avd_found = avd_exists(&runtime);
@@ -176,7 +194,7 @@ fn collect_state(app: &tauri::AppHandle) -> EngineState {
     if !runtime_found || !adb_found || !avd_found {
         return EngineState {
             state: "runtime_missing".into(),
-            message: "Runtime incompleto. Use Instalar Runtime para baixar o Android Emulator/QEMU oficial e criar o AVD NOVA.".into(),
+            message: "Runtime Android ainda não está pronto. O NOVA tentará prepará-lo automaticamente.".into(),
             runtime_found,
             adb_found,
             avd_found,
@@ -189,7 +207,7 @@ fn collect_state(app: &tauri::AppHandle) -> EngineState {
     if !acceleration_ok {
         return EngineState {
             state: "acceleration_missing".into(),
-            message: "Runtime instalado, mas a aceleração de hardware não está pronta. Ative Windows Hypervisor Platform e reinicie o PC.".into(),
+            message: "Runtime instalado, mas a aceleração de hardware ainda não está pronta. Ative Windows Hypervisor Platform e reinicie o PC.".into(),
             runtime_found,
             adb_found,
             avd_found,
@@ -212,13 +230,13 @@ fn collect_state(app: &tauri::AppHandle) -> EngineState {
 }
 
 #[tauri::command]
-fn engine_status(app: tauri::AppHandle) -> EngineState {
-    collect_state(&app)
+fn engine_status() -> EngineState {
+    collect_state()
 }
 
 #[tauri::command]
 fn install_runtime(app: tauri::AppHandle) -> EngineState {
-    let runtime = runtime_root(&app);
+    let runtime = runtime_root();
     let script = script_path(&app, "install-runtime.ps1");
 
     if !script.exists() {
@@ -244,7 +262,7 @@ fn install_runtime(app: tauri::AppHandle) -> EngineState {
     match spawn_result {
         Ok(_) => EngineState {
             state: "installing".into(),
-            message: "Instalador aberto. Ele baixará o runtime oficial e pedirá sua aceitação das licenças do Android SDK.".into(),
+            message: "Preparando o runtime Android em segundo plano. Na primeira instalação, conclua as licenças oficiais exibidas no terminal.".into(),
             runtime_found: emulator_path(&runtime).exists(),
             adb_found: adb_path(&runtime).exists(),
             avd_found: avd_exists(&runtime),
@@ -254,7 +272,7 @@ fn install_runtime(app: tauri::AppHandle) -> EngineState {
         },
         Err(error) => EngineState {
             state: "error".into(),
-            message: format!("Falha ao abrir instalador: {error}"),
+            message: format!("Falha ao abrir preparador do runtime: {error}"),
             runtime_found: false,
             adb_found: false,
             avd_found: false,
@@ -267,8 +285,8 @@ fn install_runtime(app: tauri::AppHandle) -> EngineState {
 
 #[tauri::command]
 fn start_engine(app: tauri::AppHandle, profile: String) -> EngineState {
-    let runtime = runtime_root(&app);
-    let current = collect_state(&app);
+    let runtime = runtime_root();
+    let current = collect_state();
     if current.state != "ready" && current.state != "running" && current.state != "starting" {
         return current;
     }
@@ -324,15 +342,94 @@ fn start_engine(app: tauri::AppHandle, profile: String) -> EngineState {
 }
 
 #[tauri::command]
-fn stop_engine(app: tauri::AppHandle) -> EngineState {
-    let runtime = runtime_root(&app);
+fn stop_engine() -> EngineState {
+    let runtime = runtime_root();
     let adb = adb_path(&runtime);
     if adb.exists() {
         let _ = Command::new(adb)
             .args(["-s", "emulator-5554", "emu", "kill"])
             .output();
     }
-    collect_state(&app)
+    collect_state()
+}
+
+#[tauri::command]
+fn list_apps() -> Result<Vec<InstalledApp>, String> {
+    let runtime = runtime_root();
+    if !boot_complete(&runtime) {
+        return Err("Inicie o Android antes de carregar a lista de apps.".into());
+    }
+
+    let output = adb_result(
+        &runtime,
+        &["-s", "emulator-5554", "shell", "pm", "list", "packages", "-3"],
+    )?;
+
+    let mut apps: Vec<InstalledApp> = output
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("package:"))
+        .filter(|package| !package.is_empty())
+        .map(|package| InstalledApp { package: package.to_string() })
+        .collect();
+    apps.sort_by(|a, b| a.package.cmp(&b.package));
+    Ok(apps)
+}
+
+#[tauri::command]
+fn install_apk() -> Result<String, String> {
+    let runtime = runtime_root();
+    if !boot_complete(&runtime) {
+        return Err("Inicie o Android e aguarde o boot terminar antes de instalar um APK.".into());
+    }
+
+    let file = rfd::FileDialog::new()
+        .add_filter("Android APK", &["apk"])
+        .set_title("Escolha um APK para instalar no NOVA")
+        .pick_file()
+        .ok_or_else(|| "Seleção de APK cancelada.".to_string())?;
+
+    let adb = adb_path(&runtime);
+    let output = Command::new(adb)
+        .args(["-s", "emulator-5554", "install", "-r"])
+        .arg(&file)
+        .output()
+        .map_err(|error| format!("Falha ao executar instalação: {error}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+    if output.status.success() && stdout.to_ascii_lowercase().contains("success") {
+        Ok(format!("APK instalado com sucesso: {}", file.file_name().and_then(|n| n.to_str()).unwrap_or("arquivo.apk")))
+    } else {
+        Err(if stderr.is_empty() { stdout } else { stderr })
+    }
+}
+
+#[tauri::command]
+fn launch_app(package: String) -> Result<String, String> {
+    let runtime = runtime_root();
+    if !boot_complete(&runtime) {
+        return Err("Inicie o Android antes de abrir um app.".into());
+    }
+    if package.trim().is_empty() {
+        return Err("Pacote inválido.".into());
+    }
+
+    adb_result(
+        &runtime,
+        &[
+            "-s",
+            "emulator-5554",
+            "shell",
+            "monkey",
+            "-p",
+            package.trim(),
+            "-c",
+            "android.intent.category.LAUNCHER",
+            "1",
+        ],
+    )?;
+    Ok(format!("Abrindo {}", package.trim()))
 }
 
 pub fn run() {
@@ -341,7 +438,10 @@ pub fn run() {
             engine_status,
             install_runtime,
             start_engine,
-            stop_engine
+            stop_engine,
+            list_apps,
+            install_apk,
+            launch_app
         ])
         .run(tauri::generate_context!())
         .expect("error while running NOVA Emulator");
