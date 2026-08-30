@@ -6,8 +6,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) {
-  $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-  $RuntimeRoot = Join-Path $RepoRoot 'engine\runtime'
+  $RuntimeRoot = Join-Path $env:LOCALAPPDATA 'NOVA Emulator\engine\runtime'
 }
 
 $SdkRoot = Join-Path $RuntimeRoot 'sdk'
