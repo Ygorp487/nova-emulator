@@ -1,16 +1,21 @@
 param(
   [ValidateSet('eco','balanced','performance')]
-  [string]$Profile = 'balanced'
+  [string]$Profile = 'balanced',
+  [string]$RuntimeRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
-$RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$SdkRoot = Join-Path $RepoRoot 'engine\runtime\sdk'
-$AvdHome = Join-Path $RepoRoot 'engine\runtime\avd'
+if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) {
+  $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+  $RuntimeRoot = Join-Path $RepoRoot 'engine\runtime'
+}
+
+$SdkRoot = Join-Path $RuntimeRoot 'sdk'
+$AvdHome = Join-Path $RuntimeRoot 'avd'
 $Emulator = Join-Path $SdkRoot 'emulator\emulator.exe'
 $Adb = Join-Path $SdkRoot 'platform-tools\adb.exe'
 $AvdConfig = Join-Path $AvdHome 'NOVA.avd\config.ini'
-$LogRoot = Join-Path $RepoRoot 'engine\runtime\logs'
+$LogRoot = Join-Path $RuntimeRoot 'logs'
 $LogFile = Join-Path $LogRoot 'engine-last-start.log'
 
 $env:ANDROID_SDK_ROOT = $SdkRoot
@@ -50,7 +55,6 @@ if ($LASTEXITCODE -ne 0 -or $accelOutput -notmatch '(?i)usable') {
   throw "Aceleração de hardware indisponível. Resultado: $accelOutput"
 }
 
-# Remove referências ADB antigas que podem sobreviver a um fechamento forçado.
 & $Adb start-server | Out-Null
 
 $args = @(
@@ -66,10 +70,10 @@ $args = @(
   '-netspeed', 'full'
 )
 
-"[$(Get-Date -Format o)] NOVA start profile=$Profile cpu=$($settings.Cpu) ram=$($settings.Ram) gpu=$($settings.Gpu)" | Set-Content $LogFile -Encoding UTF8
+"[$(Get-Date -Format o)] NOVA start profile=$Profile cpu=$($settings.Cpu) ram=$($settings.Ram) gpu=$($settings.Gpu) runtime=$RuntimeRoot" | Set-Content $LogFile -Encoding UTF8
 Write-Host "[NOVA] Iniciando perfil ${Profile}: $($settings.Cpu) cores / $($settings.Ram) MB / GPU $($settings.Gpu)" -ForegroundColor Cyan
 
-$process = Start-Process -FilePath $Emulator -ArgumentList $args -WorkingDirectory $RepoRoot -PassThru
+$process = Start-Process -FilePath $Emulator -ArgumentList $args -WorkingDirectory $RuntimeRoot -PassThru
 "PID=$($process.Id)" | Add-Content $LogFile -Encoding UTF8
 
 Write-Host '[NOVA] Aguardando ADB...' -ForegroundColor DarkGray
