@@ -84,8 +84,7 @@ fn collect_state() -> EngineState {
     let avd_found = avd_exists(&root);
     let running = android_running(&root);
     let acceleration = acceleration_status(&root);
-    let acceleration_ok = acceleration.to_ascii_lowercase().contains("usable")
-        || acceleration.to_ascii_lowercase().contains("whpx");
+    let acceleration_ok = acceleration.to_ascii_lowercase().contains("usable");
 
     if running {
         return EngineState {
