@@ -51,7 +51,7 @@ function Invoke-WingetInstall([string]$Id, [string]$Label, [string]$Override = '
   Write-Step "Instalando $Label..."
   $args = @('install','--id',$Id,'-e','--silent','--accept-package-agreements','--accept-source-agreements')
   if ($Override) { $args += @('--override', $Override) }
-  & $winget.Source @args
+  & $winget.Source @args | Out-Host
   if ($LASTEXITCODE -eq 0) { return $true }
 
   Write-Host "[NOVA] winget não conseguiu instalar $Label. Tentando método alternativo..." -ForegroundColor Yellow
