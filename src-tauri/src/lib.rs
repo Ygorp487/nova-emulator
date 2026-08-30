@@ -1,7 +1,9 @@
 use serde::Serialize;
 use std::{
+    ffi::OsStr,
     path::{Path, PathBuf},
     process::Command,
+    sync::OnceLock,
 };
 use tauri::Manager;
 
@@ -21,6 +23,19 @@ struct EngineState {
 #[derive(Serialize)]
 struct InstalledApp {
     package: String,
+}
+
+static ACCELERATION_CACHE: OnceLock<(bool, String)> = OnceLock::new();
+
+fn hidden_command<S: AsRef<OsStr>>(program: S) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
 }
 
 fn dev_root() -> PathBuf {
@@ -72,25 +87,42 @@ fn avd_exists(runtime: &Path) -> bool {
     avd_home(runtime).join("NOVA.avd").join("config.ini").exists()
 }
 
-fn acceleration_status(runtime: &Path) -> String {
+fn acceleration_probe(runtime: &Path) -> (bool, String) {
     let emulator = emulator_path(runtime);
     if !emulator.exists() {
-        return "runtime não instalado".into();
+        return (false, "runtime não instalado".into());
     }
 
-    match Command::new(emulator).arg("-accel-check").output() {
-        Ok(output) => {
-            let mut text = String::from_utf8_lossy(&output.stdout).to_string();
-            text.push_str(&String::from_utf8_lossy(&output.stderr));
-            let normalized = text.trim().replace('\r', "").replace('\n', " · ");
-            if normalized.is_empty() {
-                "aceleração não detectada".into()
-            } else {
-                normalized
+    ACCELERATION_CACHE
+        .get_or_init(|| {
+            let mut command = hidden_command(&emulator);
+            match command.arg("-accel-check").output() {
+                Ok(output) => {
+                    let mut text = String::from_utf8_lossy(&output.stdout).to_string();
+                    text.push_str(&String::from_utf8_lossy(&output.stderr));
+                    let normalized = text.trim().replace('\r', "").replace('\n', " · ");
+                    let ok = output.status.success();
+                    let message = if normalized.is_empty() {
+                        if ok {
+                            "aceleração disponível · accel-check OK".into()
+                        } else {
+                            format!("aceleração indisponível · accel-check exit {}", output.status.code().unwrap_or(-1))
+                        }
+                    } else if ok {
+                        format!("OK · {normalized}")
+                    } else {
+                        normalized
+                    };
+                    (ok, message)
+                }
+                Err(error) => (false, format!("falha no accel-check: {error}")),
             }
-        }
-        Err(error) => format!("falha no accel-check: {error}"),
-    }
+        })
+        .clone()
+}
+
+fn acceleration_status(runtime: &Path) -> String {
+    acceleration_probe(runtime).1
 }
 
 fn adb_output(runtime: &Path, args: &[&str]) -> Option<String> {
@@ -99,7 +131,8 @@ fn adb_output(runtime: &Path, args: &[&str]) -> Option<String> {
         return None;
     }
 
-    Command::new(adb)
+    let mut command = hidden_command(&adb);
+    command
         .args(args)
         .output()
         .ok()
@@ -113,7 +146,8 @@ fn adb_result(runtime: &Path, args: &[&str]) -> Result<String, String> {
         return Err("ADB não encontrado. Execute o preparador do NOVA novamente.".into());
     }
 
-    let output = Command::new(adb)
+    let mut command = hidden_command(&adb);
+    let output = command
         .args(args)
         .output()
         .map_err(|error| format!("Falha ao executar ADB: {error}"))?;
@@ -161,8 +195,7 @@ fn collect_state() -> EngineState {
     let avd_found = avd_exists(&runtime);
     let running = android_running(&runtime);
     let boot_complete = boot_complete(&runtime);
-    let acceleration = acceleration_status(&runtime);
-    let acceleration_ok = acceleration.to_ascii_lowercase().contains("usable");
+    let (acceleration_ok, acceleration) = acceleration_probe(&runtime);
 
     if running && boot_complete {
         let version = android_version(&runtime).unwrap_or_else(|| "Android".into());
@@ -194,7 +227,7 @@ fn collect_state() -> EngineState {
     if !runtime_found || !adb_found || !avd_found {
         return EngineState {
             state: "runtime_missing".into(),
-            message: "Runtime Android ainda não está pronto. O NOVA tentará prepará-lo automaticamente.".into(),
+            message: "Runtime Android ainda não está pronto. Execute o preparador do NOVA para concluir o ambiente.".into(),
             runtime_found,
             adb_found,
             avd_found,
@@ -207,7 +240,7 @@ fn collect_state() -> EngineState {
     if !acceleration_ok {
         return EngineState {
             state: "acceleration_missing".into(),
-            message: "Runtime instalado, mas a aceleração de hardware ainda não está pronta. Ative Windows Hypervisor Platform e reinicie o PC.".into(),
+            message: "O Android Emulator retornou falha no accel-check. O NOVA não abrirá ativadores em loop; confira o diagnóstico exibido em Configurações.".into(),
             runtime_found,
             adb_found,
             avd_found,
@@ -262,7 +295,7 @@ fn install_runtime(app: tauri::AppHandle) -> EngineState {
     match spawn_result {
         Ok(_) => EngineState {
             state: "installing".into(),
-            message: "Preparando o runtime Android em segundo plano. Na primeira instalação, conclua as licenças oficiais exibidas no terminal.".into(),
+            message: "Preparando o runtime Android. Na primeira instalação, conclua as licenças oficiais exibidas no terminal.".into(),
             runtime_found: emulator_path(&runtime).exists(),
             adb_found: adb_path(&runtime).exists(),
             avd_found: avd_exists(&runtime),
@@ -309,7 +342,8 @@ fn start_engine(app: tauri::AppHandle, profile: String) -> EngineState {
         };
     }
 
-    match Command::new("powershell.exe")
+    let mut command = hidden_command("powershell.exe");
+    match command
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(script)
         .arg("-Profile")
@@ -346,7 +380,8 @@ fn stop_engine() -> EngineState {
     let runtime = runtime_root();
     let adb = adb_path(&runtime);
     if adb.exists() {
-        let _ = Command::new(adb)
+        let mut command = hidden_command(&adb);
+        let _ = command
             .args(["-s", "emulator-5554", "emu", "kill"])
             .output();
     }
@@ -389,7 +424,8 @@ fn install_apk() -> Result<String, String> {
         .ok_or_else(|| "Seleção de APK cancelada.".to_string())?;
 
     let adb = adb_path(&runtime);
-    let output = Command::new(adb)
+    let mut command = hidden_command(&adb);
+    let output = command
         .args(["-s", "emulator-5554", "install", "-r"])
         .arg(&file)
         .output()
