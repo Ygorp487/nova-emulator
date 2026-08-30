@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $TempRoot = Join-Path $env:TEMP 'NOVA-Emulator-Setup'
+$RuntimeRoot = Join-Path $env:LOCALAPPDATA 'NOVA Emulator\engine\runtime'
 New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
 
 function Write-Step([string]$Text) {
@@ -68,7 +69,7 @@ function Install-Node {
   if (-not $release) { throw 'Não foi possível descobrir a versão LTS do Node.js.' }
   $version = $release.version
   $msi = Join-Path $TempRoot "node-$version-x64.msi"
-  Invoke-WebRequest "https://nodejs.org/dist/$version/node-$version-x64.msi" -OutFile $msi
+  Invoke-WebRequest "https://nodejs.org/dist/$version/node-$version-x64.msi" -OutFile $msi -UseBasicParsing
   $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @('/i',"`"$msi`"",'/qn','/norestart')
   if ($p.ExitCode -ne 0) { throw "Falha ao instalar Node.js (código $($p.ExitCode))." }
   Refresh-Path
@@ -84,7 +85,7 @@ function Install-Rust {
 
   Write-Step 'Baixando rustup oficial...'
   $rustup = Join-Path $TempRoot 'rustup-init.exe'
-  Invoke-WebRequest 'https://win.rustup.rs/x86_64' -OutFile $rustup
+  Invoke-WebRequest 'https://win.rustup.rs/x86_64' -OutFile $rustup -UseBasicParsing
   $p = Start-Process $rustup -Wait -PassThru -ArgumentList @('-y','--default-toolchain','stable','--profile','minimal')
   if ($p.ExitCode -ne 0) { throw "Falha ao instalar Rust (código $($p.ExitCode))." }
   Refresh-Path
@@ -98,7 +99,7 @@ function Install-VCTools {
 
   Write-Step 'Baixando Visual Studio Build Tools oficial...'
   $installer = Join-Path $TempRoot 'vs_BuildTools.exe'
-  Invoke-WebRequest 'https://aka.ms/vs/17/release/vs_BuildTools.exe' -OutFile $installer
+  Invoke-WebRequest 'https://aka.ms/vs/17/release/vs_BuildTools.exe' -OutFile $installer -UseBasicParsing
   $p = Start-Process $installer -Wait -PassThru -ArgumentList @('--wait','--passive','--norestart','--add','Microsoft.VisualStudio.Workload.VCTools','--includeRecommended')
   if ($p.ExitCode -notin @(0,3010)) { throw "Falha ao instalar Visual C++ Build Tools (código $($p.ExitCode))." }
 }
@@ -109,9 +110,34 @@ function Install-WebView2 {
 
   Write-Step 'Baixando WebView2 Runtime oficial...'
   $installer = Join-Path $TempRoot 'MicrosoftEdgeWebview2Setup.exe'
-  Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $installer
+  Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $installer -UseBasicParsing
   $p = Start-Process $installer -Wait -PassThru -ArgumentList @('/silent','/install')
   if ($p.ExitCode -ne 0) { throw "Falha ao instalar WebView2 Runtime (código $($p.ExitCode))." }
+}
+
+function Test-NovaRuntime {
+  $emulator = Join-Path $RuntimeRoot 'sdk\emulator\emulator.exe'
+  $adb = Join-Path $RuntimeRoot 'sdk\platform-tools\adb.exe'
+  $avd = Join-Path $RuntimeRoot 'avd\NOVA.avd\config.ini'
+  return (Test-Path $emulator) -and (Test-Path $adb) -and (Test-Path $avd)
+}
+
+function Ensure-NovaRuntime {
+  if (Test-NovaRuntime) {
+    Write-Host '[OK] Runtime Android do NOVA já está instalado.' -ForegroundColor Green
+    return
+  }
+
+  Write-Step 'Preparando runtime Android do NOVA'
+  Write-Host '[NOVA] O runtime será instalado agora, antes do aplicativo ser aberto/gerado.' -ForegroundColor Yellow
+  Write-Host '[NOVA] Na primeira vez, o Android SDK pedirá a aceitação das licenças oficiais.' -ForegroundColor Yellow
+  $runtimeInstaller = Join-Path $RepoRoot 'engine\scripts\install-runtime.ps1'
+  if (-not (Test-Path $runtimeInstaller)) { throw "Instalador do runtime não encontrado: $runtimeInstaller" }
+
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runtimeInstaller -RuntimeRoot $RuntimeRoot -NoPause
+  if ($LASTEXITCODE -ne 0) { throw "A instalação do runtime falhou (código $LASTEXITCODE)." }
+  if (-not (Test-NovaRuntime)) { throw 'O instalador terminou, mas o runtime NOVA continua incompleto.' }
+  Write-Host '[OK] Runtime Android pronto.' -ForegroundColor Green
 }
 
 Refresh-Path
@@ -141,6 +167,9 @@ Write-Host "[OK] Rust:  $(rustc --version)" -ForegroundColor Green
 Write-Host '[OK] C++ Build Tools detectado' -ForegroundColor Green
 if (Test-WebView2) { Write-Host '[OK] WebView2 detectado' -ForegroundColor Green }
 
+# Prepare/run/build now all validate the Android runtime too.
+Ensure-NovaRuntime
+
 Push-Location $RepoRoot
 try {
   Write-Step 'Instalando/atualizando dependências do NOVA'
@@ -154,7 +183,7 @@ try {
       & cargo.exe check
       if ($LASTEXITCODE -ne 0) { throw "cargo check falhou (código $LASTEXITCODE)." }
     } finally { Pop-Location }
-    Write-Host "`n[NOVA] Tudo pronto." -ForegroundColor Green
+    Write-Host "`n[NOVA] Tudo pronto, incluindo o runtime Android." -ForegroundColor Green
     exit 0
   }
 
@@ -182,6 +211,7 @@ try {
 
     Write-Host "`n[NOVA] EXE GERADO COM SUCESSO:" -ForegroundColor Green
     Write-Host $final -ForegroundColor White
+    Write-Host '[NOVA] Runtime Android também está pronto neste computador.' -ForegroundColor Green
     Start-Process explorer.exe -ArgumentList "/select,`"$final`""
   }
 } finally {
