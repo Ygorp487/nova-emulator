@@ -1,7 +1,10 @@
 node_modules/
 dist/
 src-tauri/target/
+src-tauri/engine/
+src-tauri/icons/*.png
 engine/runtime/
+NOVA-BUILD/
 *.log
 .DS_Store
 Thumbs.db
