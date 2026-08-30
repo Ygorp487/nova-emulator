@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "prepare:bundle": "node scripts/prepare-bundle.mjs",
+    "build": "npm run prepare:bundle && tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri"
   },
