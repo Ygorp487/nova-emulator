@@ -49,9 +49,8 @@ fn runtime_root() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::temp_dir())
-        .join("NOVA Emulator")
-        .join("engine")
-        .join("runtime")
+        .join("NOVA")
+        .join("Runtime")
 }
 
 fn script_path(app: &tauri::AppHandle, name: &str) -> PathBuf {
@@ -106,16 +105,16 @@ fn acceleration_probe(runtime: &Path) -> (bool, String) {
                         if ok {
                             "aceleração disponível · accel-check OK".into()
                         } else {
-                            format!("aceleração indisponível · accel-check exit {}", output.status.code().unwrap_or(-1))
+                            format!("accel-check inconclusivo · exit {} · o NOVA testará no início real", output.status.code().unwrap_or(-1))
                         }
                     } else if ok {
                         format!("OK · {normalized}")
                     } else {
-                        normalized
+                        format!("Diagnóstico inconclusivo · {normalized}")
                     };
                     (ok, message)
                 }
-                Err(error) => (false, format!("falha no accel-check: {error}")),
+                Err(error) => (false, format!("accel-check indisponível: {error} · o NOVA testará no início real")),
             }
         })
         .clone()
@@ -237,22 +236,13 @@ fn collect_state() -> EngineState {
         };
     }
 
-    if !acceleration_ok {
-        return EngineState {
-            state: "acceleration_missing".into(),
-            message: "O Android Emulator retornou falha no accel-check. O NOVA não abrirá ativadores em loop; confira o diagnóstico exibido em Configurações.".into(),
-            runtime_found,
-            adb_found,
-            avd_found,
-            running,
-            boot_complete,
-            acceleration,
-        };
-    }
-
     EngineState {
         state: "ready".into(),
-        message: "Runtime Android x86_64 pronto para iniciar com aceleração de hardware.".into(),
+        message: if acceleration_ok {
+            "Runtime Android x86_64 pronto para iniciar com aceleração de hardware.".into()
+        } else {
+            "Runtime pronto. O accel-check foi inconclusivo, então o NOVA permitirá iniciar e usará o resultado real do Android Emulator.".into()
+        },
         runtime_found,
         adb_found,
         avd_found,
@@ -285,7 +275,8 @@ fn install_runtime(app: tauri::AppHandle) -> EngineState {
         };
     }
 
-    let spawn_result = Command::new("powershell.exe")
+    let mut command = hidden_command("powershell.exe");
+    let spawn_result = command
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(script)
         .arg("-RuntimeRoot")
