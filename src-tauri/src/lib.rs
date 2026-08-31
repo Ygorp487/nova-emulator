@@ -324,7 +324,6 @@ fn repair_avd(runtime: &Path) -> Result<(), String> {
     fs::write(&ini, descriptor)
         .map_err(|error| format!("Falha ao reparar NOVA.ini: {error}"))?;
 
-    // Keep the virtual device intentionally conservative. The engine controls advanced settings.
     set_ini_value(&config, "hw.keyboard", "yes")?;
     set_ini_value(&config, "hw.gpu.enabled", "yes")?;
     set_ini_value(&config, "hw.gpu.mode", "auto")?;
@@ -539,7 +538,7 @@ fn kill_process_tree(pid: u32) {
 fn kill_stale_runtime_emulators(runtime: &Path) {
     #[cfg(target_os = "windows")]
     {
-        let runtime_text = runtime.display().to_string().replace(''', "''");
+        let runtime_text = runtime.display().to_string().replace("'", "''");
         let script = format!(
             "$root='{runtime_text}'; Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {{ ($_.Name -eq 'emulator.exe' -or $_.Name -eq 'qemu-system-x86_64.exe') -and ((-not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and $_.ExecutablePath.StartsWith($root,[System.StringComparison]::OrdinalIgnoreCase)) -or (-not [string]::IsNullOrWhiteSpace($_.CommandLine) -and $_.CommandLine.IndexOf($root,[System.StringComparison]::OrdinalIgnoreCase) -ge 0)) }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
         );
@@ -837,7 +836,7 @@ fn run_launch_sequence(runtime: PathBuf, profile_name: String) -> Result<(), Str
             .iter()
             .enumerate()
             .map(|(index, gpu)| AttemptPlan {
-                gpu,
+                gpu: *gpu,
                 cold_boot: index > 0,
                 wipe_data: false,
                 disable_vulkan: *gpu == "software" || *gpu == "swiftshader_indirect",
