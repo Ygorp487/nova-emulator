@@ -117,67 +117,55 @@ function Install-WebView2 {
 }
 
 function Stop-NovaRuntimeProcesses {
-  $targets = @()
+  $roots = @($LegacyRuntimeRoot, $RuntimeRoot)
   try {
-    $targets = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+    $targets = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
       if ($_.ProcessId -eq $PID) { return $false }
-      $pathMatch = $false
-      $commandMatch = $false
-      if (-not [string]::IsNullOrWhiteSpace($_.ExecutablePath)) {
-        $pathMatch = $_.ExecutablePath.StartsWith($LegacyRuntimeRoot, [System.StringComparison]::OrdinalIgnoreCase)
-      }
-      if (-not [string]::IsNullOrWhiteSpace($_.CommandLine)) {
-        $commandMatch = $_.CommandLine.IndexOf($LegacyRuntimeRoot, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
-      }
-      $nameMatch = @('nova-emulator.exe','NOVA Emulator.exe') -contains $_.Name
-      return $pathMatch -or $commandMatch -or $nameMatch
-    })
-  } catch {}
+      if ($_.Name -notin @('emulator.exe','qemu-system-x86_64.exe','nova-emulator.exe','NOVA Emulator.exe')) { return $false }
 
-  foreach ($process in $targets) {
-    try {
-      Write-Host ("[NOVA] Fechando {0} (PID {1})..." -f $process.Name, $process.ProcessId) -ForegroundColor Yellow
-      Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
-    } catch {}
-  }
-  Start-Sleep -Milliseconds 700
+      foreach ($root in $roots) {
+        if (-not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and $_.ExecutablePath.StartsWith($root,[System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+        if (-not [string]::IsNullOrWhiteSpace($_.CommandLine) -and $_.CommandLine.IndexOf($root,[System.StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true }
+      }
+      return ($_.Name -in @('nova-emulator.exe','NOVA Emulator.exe'))
+    })
+
+    foreach ($process in $targets) {
+      try {
+        Write-Host ("[NOVA] Fechando {0} (PID {1})..." -f $process.Name, $process.ProcessId) -ForegroundColor Yellow
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+      } catch {}
+    }
+  } catch {}
+  Start-Sleep -Milliseconds 800
 }
 
 function Stop-NovaBuildProcesses {
   Write-Host '[NOVA] Liberando processos antigos de compilação do NOVA...' -ForegroundColor DarkGray
-  $allowedNames = @(
-    'node.exe','cargo.exe','rustc.exe','rust-analyzer.exe','esbuild.exe',
-    'nova-emulator.exe','NOVA Emulator.exe'
-  )
-  $targets = @()
-
+  $allowedNames = @('node.exe','cargo.exe','rustc.exe','rust-analyzer.exe','esbuild.exe','nova-emulator.exe','NOVA Emulator.exe')
   try {
-    $targets = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+    $targets = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
       if ($_.ProcessId -eq $PID) { return $false }
       if ($allowedNames -notcontains $_.Name) { return $false }
 
       $pathInTarget = $false
       $commandInRepo = $false
       if (-not [string]::IsNullOrWhiteSpace($_.ExecutablePath)) {
-        $pathInTarget = $_.ExecutablePath.StartsWith($TauriTargetRoot, [System.StringComparison]::OrdinalIgnoreCase)
+        $pathInTarget = $_.ExecutablePath.StartsWith($TauriTargetRoot,[System.StringComparison]::OrdinalIgnoreCase)
       }
       if (-not [string]::IsNullOrWhiteSpace($_.CommandLine)) {
-        $commandInRepo = $_.CommandLine.IndexOf($RepoRoot, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+        $commandInRepo = $_.CommandLine.IndexOf($RepoRoot,[System.StringComparison]::OrdinalIgnoreCase) -ge 0
       }
       return $pathInTarget -or $commandInRepo
     })
-  } catch {
-    Write-Host '[NOVA] Não foi possível consultar processos de build via CIM.' -ForegroundColor Yellow
-  }
 
-  foreach ($process in $targets) {
-    try {
-      Write-Host ("[NOVA] Encerrando processo antigo {0} (PID {1})..." -f $process.Name, $process.ProcessId) -ForegroundColor Yellow
-      Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
-    } catch {
-      Write-Host ("[NOVA] Processo PID {0} já encerrou ou não pôde ser fechado." -f $process.ProcessId) -ForegroundColor DarkGray
+    foreach ($process in $targets) {
+      try {
+        Write-Host ("[NOVA] Encerrando processo antigo {0} (PID {1})..." -f $process.Name, $process.ProcessId) -ForegroundColor Yellow
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+      } catch {}
     }
-  }
+  } catch {}
   Start-Sleep -Milliseconds 900
 }
 
@@ -228,21 +216,36 @@ function Test-NovaRuntime {
   return (Test-Path $emulator) -and (Test-Path $adb) -and (Test-Path $avd)
 }
 
+function Get-NovaEmulatorVersion {
+  $source = Join-Path $RuntimeRoot 'sdk\emulator\source.properties'
+  if (-not (Test-Path $source)) { return '' }
+  $line = Get-Content $source -ErrorAction SilentlyContinue | Where-Object { $_ -match '^Pkg\.Revision\s*=' } | Select-Object -First 1
+  if (-not $line) { return '' }
+  return (($line -split '=',2)[1]).Trim()
+}
+
 function Ensure-NovaRuntime {
   Migrate-LegacyRuntime
-  if (Test-NovaRuntime) {
-    Write-Host '[OK] Runtime Android do NOVA já está instalado.' -ForegroundColor Green
-    return
-  }
+  Stop-NovaRuntimeProcesses
 
-  Write-Step 'Preparando runtime Android do NOVA'
-  Write-Host '[NOVA] Na primeira vez, o Android SDK pedirá a aceitação das licenças oficiais.' -ForegroundColor Yellow
   $runtimeInstaller = Join-Path $RepoRoot 'engine\scripts\install-runtime.ps1'
   if (-not (Test-Path $runtimeInstaller)) { throw "Instalador do runtime não encontrado: $runtimeInstaller" }
+
+  if (Test-NovaRuntime) {
+    $current = Get-NovaEmulatorVersion
+    Write-Step "Verificando runtime Android controlado (atual: $current)"
+  } else {
+    Write-Step 'Preparando runtime Android do NOVA'
+    Write-Host '[NOVA] Na primeira vez, o Android SDK pedirá a aceitação das licenças oficiais.' -ForegroundColor Yellow
+  }
+
+  # Always execute the runtime verifier. It is idempotent and also pins the Emulator version.
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runtimeInstaller -RuntimeRoot $RuntimeRoot -NoPause
-  if ($LASTEXITCODE -ne 0) { throw "A instalação do runtime falhou (código $LASTEXITCODE)." }
-  if (-not (Test-NovaRuntime)) { throw 'O instalador terminou, mas o runtime NOVA continua incompleto.' }
-  Write-Host '[OK] Runtime Android pronto.' -ForegroundColor Green
+  if ($LASTEXITCODE -ne 0) { throw "A instalação/verificação do runtime falhou (código $LASTEXITCODE)." }
+  if (-not (Test-NovaRuntime)) { throw 'O verificador terminou, mas o runtime NOVA continua incompleto.' }
+
+  $finalVersion = Get-NovaEmulatorVersion
+  Write-Host "[OK] Runtime Android pronto. Emulator: $finalVersion" -ForegroundColor Green
 }
 
 Refresh-Path
@@ -289,13 +292,13 @@ try {
       & cargo.exe check
       if ($LASTEXITCODE -ne 0) { throw "cargo check falhou (código $LASTEXITCODE)." }
     } finally { Pop-Location }
-    Write-Host "`n[NOVA] Tudo pronto, incluindo o runtime Android." -ForegroundColor Green
+    Write-Host "`n[NOVA] Tudo pronto, incluindo runtime Android controlado." -ForegroundColor Green
     exit 0
   }
 
   if ($Mode -eq 'run') {
     Write-Step 'Abrindo NOVA em modo de desenvolvimento'
-    Write-Host '[NOVA] Este modo é apenas para desenvolvimento. O fluxo normal usa o instalador release.' -ForegroundColor Yellow
+    Write-Host '[NOVA] Este modo é somente para desenvolvimento interno.' -ForegroundColor Yellow
     & npm.cmd run tauri dev
     exit $LASTEXITCODE
   }
@@ -320,6 +323,7 @@ try {
     Write-Host "`n[NOVA] EXE GERADO COM SUCESSO:" -ForegroundColor Green
     Write-Host $final -ForegroundColor White
     Write-Host "[NOVA] Runtime Android: $RuntimeRoot" -ForegroundColor Green
+    Write-Host "[NOVA] Emulator controlado: $(Get-NovaEmulatorVersion)" -ForegroundColor Green
     Start-Process explorer.exe -ArgumentList "/select,`"$final`""
   }
 } finally {
