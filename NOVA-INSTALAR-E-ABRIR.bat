@@ -37,10 +37,22 @@ set "APP2=%LOCALAPPDATA%\Programs\NOVA Emulator\NOVA Emulator.exe"
 set "APP3=%PROGRAMFILES%\NOVA Emulator\NOVA Emulator.exe"
 set "APP4=%PROGRAMFILES(X86)%\NOVA Emulator\NOVA Emulator.exe"
 
-if exist "%APP1%" start "" "%APP1%" & exit /b 0
-if exist "%APP2%" start "" "%APP2%" & exit /b 0
-if exist "%APP3%" start "" "%APP3%" & exit /b 0
-if exist "%APP4%" start "" "%APP4%" & exit /b 0
+if exist "%APP1%" (
+  start "" "%APP1%"
+  exit /b 0
+)
+if exist "%APP2%" (
+  start "" "%APP2%"
+  exit /b 0
+)
+if exist "%APP3%" (
+  start "" "%APP3%"
+  exit /b 0
+)
+if exist "%APP4%" (
+  start "" "%APP4%"
+  exit /b 0
+)
 
 echo.
 echo [NOVA] Instalacao concluida. Se o NOVA nao abriu automaticamente,
