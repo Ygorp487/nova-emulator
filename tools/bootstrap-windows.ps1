@@ -9,6 +9,7 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 $TempRoot = Join-Path $env:TEMP 'NOVA-Emulator-Setup'
 $RuntimeRoot = Join-Path $env:LOCALAPPDATA 'NOVA\Runtime'
 $LegacyRuntimeRoot = Join-Path $env:LOCALAPPDATA 'NOVA Emulator\engine\runtime'
+$TauriTargetRoot = Join-Path $RepoRoot 'src-tauri\target'
 New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
 
 function Write-Step([string]$Text) {
@@ -86,7 +87,7 @@ function Install-Rust {
 
   Write-Step 'Baixando rustup oficial...'
   $rustup = Join-Path $TempRoot 'rustup-init.exe'
-  Invoke-WebRequest 'https://win.rustup.rs/x86_64' -OutFile $rustup -UseBasicParsing
+  Invoke-WebRequest 'https://win.rustup.rs/x86_64' -OutFile $rustup
   $p = Start-Process $rustup -Wait -PassThru -ArgumentList @('-y','--default-toolchain','stable','--profile','minimal')
   if ($p.ExitCode -ne 0) { throw "Falha ao instalar Rust (código $($p.ExitCode))." }
   Refresh-Path
@@ -94,13 +95,12 @@ function Install-Rust {
 
 function Install-VCTools {
   if (Test-VCTools) { return }
-
   $override = '--wait --passive --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended'
   if (Invoke-WingetInstall 'Microsoft.VisualStudio.2022.BuildTools' 'Visual C++ Build Tools' $override) { return }
 
   Write-Step 'Baixando Visual Studio Build Tools oficial...'
   $installer = Join-Path $TempRoot 'vs_BuildTools.exe'
-  Invoke-WebRequest 'https://aka.ms/vs/17/release/vs_BuildTools.exe' -OutFile $installer -UseBasicParsing
+  Invoke-WebRequest 'https://aka.ms/vs/17/release/vs_BuildTools.exe' -OutFile $installer
   $p = Start-Process $installer -Wait -PassThru -ArgumentList @('--wait','--passive','--norestart','--add','Microsoft.VisualStudio.Workload.VCTools','--includeRecommended')
   if ($p.ExitCode -notin @(0,3010)) { throw "Falha ao instalar Visual C++ Build Tools (código $($p.ExitCode))." }
 }
@@ -111,21 +111,16 @@ function Install-WebView2 {
 
   Write-Step 'Baixando WebView2 Runtime oficial...'
   $installer = Join-Path $TempRoot 'MicrosoftEdgeWebview2Setup.exe'
-  Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $installer -UseBasicParsing
+  Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $installer
   $p = Start-Process $installer -Wait -PassThru -ArgumentList @('/silent','/install')
   if ($p.ExitCode -ne 0) { throw "Falha ao instalar WebView2 Runtime (código $($p.ExitCode))." }
 }
 
 function Stop-NovaRuntimeProcesses {
-  Write-Host '[NOVA] Verificando processos que podem estar usando o runtime antigo...' -ForegroundColor DarkGray
-
-  $novaNames = @('nova-emulator.exe', 'NOVA Emulator.exe')
   $targets = @()
-
   try {
     $targets = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
       if ($_.ProcessId -eq $PID) { return $false }
-
       $pathMatch = $false
       $commandMatch = $false
       if (-not [string]::IsNullOrWhiteSpace($_.ExecutablePath)) {
@@ -134,49 +129,82 @@ function Stop-NovaRuntimeProcesses {
       if (-not [string]::IsNullOrWhiteSpace($_.CommandLine)) {
         $commandMatch = $_.CommandLine.IndexOf($LegacyRuntimeRoot, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
       }
-
-      $nameMatch = $novaNames -contains $_.Name
+      $nameMatch = @('nova-emulator.exe','NOVA Emulator.exe') -contains $_.Name
       return $pathMatch -or $commandMatch -or $nameMatch
     })
-  } catch {
-    Write-Host '[NOVA] Não foi possível consultar todos os processos via CIM; usando fallback por nome.' -ForegroundColor Yellow
-  }
+  } catch {}
 
   foreach ($process in $targets) {
     try {
       Write-Host ("[NOVA] Fechando {0} (PID {1})..." -f $process.Name, $process.ProcessId) -ForegroundColor Yellow
       Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+    } catch {}
+  }
+  Start-Sleep -Milliseconds 700
+}
+
+function Stop-NovaBuildProcesses {
+  Write-Host '[NOVA] Liberando processos antigos de compilação do NOVA...' -ForegroundColor DarkGray
+  $allowedNames = @(
+    'node.exe','cargo.exe','rustc.exe','rust-analyzer.exe','esbuild.exe',
+    'nova-emulator.exe','NOVA Emulator.exe'
+  )
+  $targets = @()
+
+  try {
+    $targets = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+      if ($_.ProcessId -eq $PID) { return $false }
+      if ($allowedNames -notcontains $_.Name) { return $false }
+
+      $pathInTarget = $false
+      $commandInRepo = $false
+      if (-not [string]::IsNullOrWhiteSpace($_.ExecutablePath)) {
+        $pathInTarget = $_.ExecutablePath.StartsWith($TauriTargetRoot, [System.StringComparison]::OrdinalIgnoreCase)
+      }
+      if (-not [string]::IsNullOrWhiteSpace($_.CommandLine)) {
+        $commandInRepo = $_.CommandLine.IndexOf($RepoRoot, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+      }
+      return $pathInTarget -or $commandInRepo
+    })
+  } catch {
+    Write-Host '[NOVA] Não foi possível consultar processos de build via CIM.' -ForegroundColor Yellow
+  }
+
+  foreach ($process in $targets) {
+    try {
+      Write-Host ("[NOVA] Encerrando processo antigo {0} (PID {1})..." -f $process.Name, $process.ProcessId) -ForegroundColor Yellow
+      Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
     } catch {
-      Write-Host ("[NOVA] Não consegui fechar PID {0}: {1}" -f $process.ProcessId, $_.Exception.Message) -ForegroundColor Yellow
+      Write-Host ("[NOVA] Processo PID {0} já encerrou ou não pôde ser fechado." -f $process.ProcessId) -ForegroundColor DarkGray
     }
   }
-
-  # Fallback específico para componentes Android do NOVA caso o ExecutablePath não seja exposto pelo CIM.
-  foreach ($name in @('emulator', 'qemu-system-x86_64', 'adb')) {
-    $items = @(Get-Process -Name $name -ErrorAction SilentlyContinue)
-    foreach ($item in $items) {
-      try {
-        $exe = $null
-        try { $exe = $item.Path } catch {}
-        if ($exe -and $exe.StartsWith($LegacyRuntimeRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-          Write-Host ("[NOVA] Fechando {0} (PID {1})..." -f $item.ProcessName, $item.Id) -ForegroundColor Yellow
-          Stop-Process -Id $item.Id -Force -ErrorAction Stop
-        }
-      } catch {}
-    }
-  }
-
   Start-Sleep -Milliseconds 900
+}
+
+function Reset-NovaDebugArtifacts {
+  $debugRoot = Join-Path $TauriTargetRoot 'debug'
+  if (-not (Test-Path $debugRoot)) { return }
+
+  Write-Host '[NOVA] Limpando artefatos temporários de desenvolvimento...' -ForegroundColor DarkGray
+  $lastError = $null
+  for ($attempt = 1; $attempt -le 5; $attempt++) {
+    try {
+      Remove-Item $debugRoot -Recurse -Force -ErrorAction Stop
+      Write-Host '[OK] Cache Rust de desenvolvimento liberado.' -ForegroundColor Green
+      return
+    } catch {
+      $lastError = $_.Exception.Message
+      Stop-NovaBuildProcesses
+      Start-Sleep -Milliseconds (500 * $attempt)
+    }
+  }
+  throw "Não foi possível liberar src-tauri\target\debug após 5 tentativas. Detalhe: $lastError"
 }
 
 function Migrate-LegacyRuntime {
   if ((Test-Path $LegacyRuntimeRoot) -and (-not (Test-Path $RuntimeRoot))) {
     Write-Step 'Migrando runtime existente para caminho compatível'
-    Write-Host "[NOVA] Movendo runtime sem baixar novamente:" -ForegroundColor Yellow
-    Write-Host "       $LegacyRuntimeRoot" -ForegroundColor DarkGray
-    Write-Host "    -> $RuntimeRoot" -ForegroundColor DarkGray
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $RuntimeRoot) | Out-Null
-
     $lastError = $null
     for ($attempt = 1; $attempt -le 5; $attempt++) {
       try {
@@ -186,13 +214,9 @@ function Migrate-LegacyRuntime {
         return
       } catch {
         $lastError = $_.Exception.Message
-        if ($attempt -lt 5) {
-          Write-Host ("[NOVA] Arquivos ainda ocupados. Tentativa {0}/5; aguardando para tentar novamente..." -f $attempt) -ForegroundColor Yellow
-          Start-Sleep -Seconds 2
-        }
+        Start-Sleep -Seconds 2
       }
     }
-
     throw "Não foi possível liberar/migrar o runtime após 5 tentativas. Detalhe: $lastError"
   }
 }
@@ -206,18 +230,15 @@ function Test-NovaRuntime {
 
 function Ensure-NovaRuntime {
   Migrate-LegacyRuntime
-
   if (Test-NovaRuntime) {
     Write-Host '[OK] Runtime Android do NOVA já está instalado.' -ForegroundColor Green
     return
   }
 
   Write-Step 'Preparando runtime Android do NOVA'
-  Write-Host '[NOVA] O runtime será instalado agora, antes do aplicativo ser aberto/gerado.' -ForegroundColor Yellow
   Write-Host '[NOVA] Na primeira vez, o Android SDK pedirá a aceitação das licenças oficiais.' -ForegroundColor Yellow
   $runtimeInstaller = Join-Path $RepoRoot 'engine\scripts\install-runtime.ps1'
   if (-not (Test-Path $runtimeInstaller)) { throw "Instalador do runtime não encontrado: $runtimeInstaller" }
-
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runtimeInstaller -RuntimeRoot $RuntimeRoot -NoPause
   if ($LASTEXITCODE -ne 0) { throw "A instalação do runtime falhou (código $LASTEXITCODE)." }
   if (-not (Test-NovaRuntime)) { throw 'O instalador terminou, mas o runtime NOVA continua incompleto.' }
@@ -252,6 +273,8 @@ Write-Host '[OK] C++ Build Tools detectado' -ForegroundColor Green
 if (Test-WebView2) { Write-Host '[OK] WebView2 detectado' -ForegroundColor Green }
 
 Ensure-NovaRuntime
+Stop-NovaBuildProcesses
+Reset-NovaDebugArtifacts
 
 Push-Location $RepoRoot
 try {
@@ -271,13 +294,15 @@ try {
   }
 
   if ($Mode -eq 'run') {
-    Write-Step 'Abrindo NOVA Emulator'
+    Write-Step 'Abrindo NOVA em modo de desenvolvimento'
+    Write-Host '[NOVA] Este modo é apenas para desenvolvimento. O fluxo normal usa o instalador release.' -ForegroundColor Yellow
     & npm.cmd run tauri dev
     exit $LASTEXITCODE
   }
 
   if ($Mode -eq 'build') {
-    Write-Step 'Gerando instalador EXE do NOVA'
+    Write-Step 'Gerando instalador RELEASE do NOVA'
+    Stop-NovaBuildProcesses
     & npm.cmd run tauri build -- --bundles nsis
     if ($LASTEXITCODE -ne 0) { throw "tauri build falhou (código $LASTEXITCODE)." }
 
