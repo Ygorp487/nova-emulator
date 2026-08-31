@@ -11,7 +11,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) {
-  $RuntimeRoot = Join-Path $env:LOCALAPPDATA 'NOVA Emulator\engine\runtime'
+  $RuntimeRoot = Join-Path $env:LOCALAPPDATA 'NOVA\Runtime'
 }
 
 $SdkRoot = Join-Path $RuntimeRoot 'sdk'
@@ -164,16 +164,15 @@ try {
     throw 'O Android SDK terminou, mas Emulator ou ADB continuam ausentes.'
   }
 
-  Write-Host '[NOVA] Verificando aceleração de hardware...' -ForegroundColor Cyan
+  Write-Host '[NOVA] Verificando aceleração de hardware (diagnóstico, sem bloquear a instalação)...' -ForegroundColor Cyan
   $accelOutput = & $Emulator -accel-check 2>&1 | Out-String
-  $accelExitCode = $LASTEXITCODE
+  $accelExit = $LASTEXITCODE
   Write-Host $accelOutput
-
-  if ($accelExitCode -ne 0) {
-    Write-Host '[NOVA] O Android Emulator informou que a aceleração não está disponível.' -ForegroundColor Yellow
-    Write-Host '[NOVA] Se VT-x/AMD-V, WHPX e o hypervisor já estiverem ativos, não tente reinstalar o runtime; use o diagnóstico do NOVA.' -ForegroundColor Yellow
+  "accel_check_exit=$accelExit`n$accelOutput" | Add-Content $LogFile -Encoding UTF8
+  if ($accelExit -eq 0) {
+    Write-Host '[OK] Hipervisor detectado pelo Android Emulator.' -ForegroundColor Green
   } else {
-    Write-Host '[OK] Aceleração de hardware confirmada pelo Android Emulator.' -ForegroundColor Green
+    Write-Host '[NOVA] accel-check não confirmou a aceleração. O NOVA permitirá testar o Emulator real mesmo assim.' -ForegroundColor Yellow
   }
 
   Write-Host ''
