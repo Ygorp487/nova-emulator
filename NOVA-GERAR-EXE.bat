@@ -14,8 +14,8 @@ echo - WebView2 Runtime
 echo - Runtime Android NOVA (Emulator/QEMU + ADB + AVD)
 echo - Dependencias do projeto
 echo.
-echo Na primeira instalacao do Android, as licencas oficiais do SDK
-echo serao exibidas no terminal para voce aceitar.
+echo O gerador tambem fecha processos antigos do NOVA/Tauri/Rust
+echo e limpa somente o cache temporario de desenvolvimento se estiver travado.
 echo.
 echo Depois disso o instalador sera compilado em:
 echo NOVA-BUILD\NOVA-Setup.exe
@@ -26,7 +26,7 @@ if not "%EXITCODE%"=="0" (
   echo.
   echo [NOVA] A compilacao terminou com erro %EXITCODE%.
   echo O log do runtime fica em:
-  echo %%LOCALAPPDATA%%\NOVA Emulator\engine\runtime\logs\runtime-install.log
+  echo %%LOCALAPPDATA%%\NOVA\Runtime\logs\runtime-install.log
   echo Tire uma foto desta tela e envie para o ChatGPT se precisar.
   pause
 ) else (
