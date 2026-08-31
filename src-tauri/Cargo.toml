@@ -1,6 +1,6 @@
 [package]
 name = "nova-emulator"
-version = "0.3.0"
+version = "0.3.1"
 description = "Lightweight Android emulator launcher for Windows"
 authors = ["NOVA Emulator"]
 edition = "2021"
