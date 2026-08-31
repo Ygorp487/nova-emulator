@@ -11,9 +11,11 @@ if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) {
 
 $SdkRoot = Join-Path $RuntimeRoot 'sdk'
 $AvdHome = Join-Path $RuntimeRoot 'avd'
+$AvdDir = Join-Path $AvdHome 'NOVA.avd'
+$AvdIni = Join-Path $AvdHome 'NOVA.ini'
 $Emulator = Join-Path $SdkRoot 'emulator\emulator.exe'
 $Adb = Join-Path $SdkRoot 'platform-tools\adb.exe'
-$AvdConfig = Join-Path $AvdHome 'NOVA.avd\config.ini'
+$AvdConfig = Join-Path $AvdDir 'config.ini'
 $LogRoot = Join-Path $RuntimeRoot 'logs'
 $LogFile = Join-Path $LogRoot 'engine-last-start.log'
 $EmulatorStdout = Join-Path $LogRoot 'emulator-stdout.log'
@@ -28,6 +30,37 @@ New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
 if (-not (Test-Path $Emulator)) { throw "Android Emulator runtime not found: $Emulator" }
 if (-not (Test-Path $Adb)) { throw "ADB not found: $Adb" }
 if (-not (Test-Path $AvdConfig)) { throw "NOVA AVD not found: $AvdConfig" }
+
+function Repair-AvdDescriptor {
+  $target = 'android-35'
+  if (Test-Path $AvdIni) {
+    $existingTarget = Get-Content $AvdIni -ErrorAction SilentlyContinue | Where-Object { $_ -match '^target=' } | Select-Object -First 1
+    if ($existingTarget) { $target = ($existingTarget -replace '^target=', '').Trim() }
+  }
+
+  $desired = @(
+    'avd.ini.encoding=UTF-8',
+    "path=$AvdDir",
+    'path.rel=NOVA.avd',
+    "target=$target"
+  )
+
+  $needsRepair = $true
+  if (Test-Path $AvdIni) {
+    $current = Get-Content $AvdIni -ErrorAction SilentlyContinue
+    $pathLine = $current | Where-Object { $_ -match '^path=' } | Select-Object -First 1
+    if ($pathLine -and (($pathLine -replace '^path=', '').Trim() -eq $AvdDir)) {
+      $needsRepair = $false
+    }
+  }
+
+  if ($needsRepair) {
+    Write-Host '[NOVA] Reparando caminho interno do dispositivo virtual...' -ForegroundColor Yellow
+    Set-Content -Path $AvdIni -Value $desired -Encoding ASCII
+  }
+}
+
+Repair-AvdDescriptor
 
 $settings = switch ($Profile) {
   'eco' { @{ Cpu = 2; Ram = 2048; Gpu = 'auto' } }
@@ -77,7 +110,7 @@ $args = @(
 )
 
 "[$(Get-Date -Format o)] NOVA start profile=$Profile cpu=$($settings.Cpu) ram=$($settings.Ram) gpu=$($settings.Gpu) runtime=$RuntimeRoot" | Set-Content $LogFile -Encoding UTF8
-"accel_check_exit=$accelExit`n$accelOutput" | Add-Content $LogFile -Encoding UTF8
+"avd_ini=$AvdIni`navd_path=$AvdDir`naccel_check_exit=$accelExit`n$accelOutput" | Add-Content $LogFile -Encoding UTF8
 Remove-Item $EmulatorStdout,$EmulatorStderr -Force -ErrorAction SilentlyContinue
 Write-Host "[NOVA] Iniciando perfil ${Profile}: $($settings.Cpu) cores / $($settings.Ram) MB / GPU $($settings.Gpu)" -ForegroundColor Cyan
 
