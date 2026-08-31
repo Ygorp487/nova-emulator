@@ -60,6 +60,20 @@ function Repair-AvdDescriptor {
   }
 }
 
+# Native tools such as ADB legitimately write to stderr while a device is not online yet.
+# Do not let Windows PowerShell promote those messages to terminating NativeCommandError records.
+function Invoke-AdbSafe([string[]]$Arguments) {
+  $oldPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = 'SilentlyContinue'
+    $text = (& $Adb @Arguments 2>$null | Out-String).Trim()
+    $code = $LASTEXITCODE
+    return [pscustomobject]@{ ExitCode = $code; Text = $text }
+  } finally {
+    $ErrorActionPreference = $oldPreference
+  }
+}
+
 Repair-AvdDescriptor
 
 $settings = switch ($Profile) {
@@ -69,14 +83,17 @@ $settings = switch ($Profile) {
 }
 
 function Test-DeviceOnline {
-  $state = & $Adb -s emulator-5554 get-state 2>$null
-  return ($LASTEXITCODE -eq 0 -and ($state | Out-String).Trim() -eq 'device')
+  # `adb -s emulator-5554 get-state` prints "device not found" before the Emulator exists.
+  # `adb devices` is quiet in that normal state, so poll the device list instead.
+  $result = Invoke-AdbSafe @('devices')
+  if ($result.ExitCode -ne 0) { return $false }
+  return [bool]($result.Text -match '(?m)^emulator-5554\s+device\s*$')
 }
 
 function Test-BootComplete {
   if (-not (Test-DeviceOnline)) { return $false }
-  $boot = & $Adb -s emulator-5554 shell getprop sys.boot_completed 2>$null
-  return ($LASTEXITCODE -eq 0 -and ($boot | Out-String).Trim() -eq '1')
+  $result = Invoke-AdbSafe @('-s','emulator-5554','shell','getprop','sys.boot_completed')
+  return ($result.ExitCode -eq 0 -and $result.Text.Trim() -eq '1')
 }
 
 if (Test-BootComplete) {
@@ -85,8 +102,14 @@ if (Test-BootComplete) {
 }
 
 # accel-check is diagnostic only. The actual emulator launch with -accel on is authoritative.
-$accelOutput = & $Emulator -accel-check 2>&1 | Out-String
-$accelExit = $LASTEXITCODE
+$oldPreference = $ErrorActionPreference
+try {
+  $ErrorActionPreference = 'Continue'
+  $accelOutput = (& $Emulator -accel-check 2>&1 | Out-String).Trim()
+  $accelExit = $LASTEXITCODE
+} finally {
+  $ErrorActionPreference = $oldPreference
+}
 if ($accelExit -eq 0) {
   Write-Host '[NOVA] Aceleração detectada pelo Android Emulator.' -ForegroundColor Green
 } else {
@@ -94,7 +117,7 @@ if ($accelExit -eq 0) {
   Write-Host $accelOutput -ForegroundColor DarkGray
 }
 
-& $Adb start-server | Out-Null
+$null = Invoke-AdbSafe @('start-server')
 
 $args = @(
   '-avd', 'NOVA',
@@ -141,9 +164,9 @@ Write-Host '[NOVA] ADB conectado. Aguardando Android concluir o boot...' -Foregr
 $bootDeadline = (Get-Date).AddMinutes(3)
 while ((Get-Date) -lt $bootDeadline) {
   if (Test-BootComplete) {
-    & $Adb -s emulator-5554 shell input keyevent 82 2>$null | Out-Null
-    $androidVersion = (& $Adb -s emulator-5554 shell getprop ro.build.version.release 2>$null | Out-String).Trim()
-    $abi = (& $Adb -s emulator-5554 shell getprop ro.product.cpu.abi 2>$null | Out-String).Trim()
+    $null = Invoke-AdbSafe @('-s','emulator-5554','shell','input','keyevent','82')
+    $androidVersion = (Invoke-AdbSafe @('-s','emulator-5554','shell','getprop','ro.build.version.release')).Text.Trim()
+    $abi = (Invoke-AdbSafe @('-s','emulator-5554','shell','getprop','ro.product.cpu.abi')).Text.Trim()
     "boot_complete=1 android=$androidVersion abi=$abi" | Add-Content $LogFile -Encoding UTF8
     Write-Host "[NOVA] Android $androidVersion ($abi) pronto." -ForegroundColor Green
     exit 0
