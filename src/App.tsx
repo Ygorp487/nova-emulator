@@ -26,7 +26,7 @@ type Bindings = {
 
 const profiles = [
   { name: "Eco", cpu: "2 cores", ram: "2 GB", fps: "60 FPS" },
-  { name: "Balanced", cpu: "4 cores", ram: "4 GB", fps: "60 FPS" },
+  { name: "Balanced", cpu: "3 cores", ram: "4 GB", fps: "60 FPS" },
   { name: "Performance", cpu: "4 cores", ram: "6 GB", fps: "120 FPS*" }
 ];
 
@@ -86,7 +86,6 @@ export default function App() {
       const state = await invoke<EngineState>("engine_status");
       setEngine(state);
 
-      // Safety net for an installer copied to another PC: prepare runtime automatically.
       if (state.state === "runtime_missing" && !autoRuntimeRequested.current) {
         autoRuntimeRequested.current = true;
         void installRuntime(true);
@@ -115,7 +114,7 @@ export default function App() {
     try {
       localStorage.setItem("nova.profile", profile);
       setEngine(await invoke<EngineState>("start_engine", { profile: profile.toLowerCase() }));
-      window.setTimeout(() => void refreshStatus(), 2500);
+      window.setTimeout(() => void refreshStatus(), 800);
     } catch (error) {
       setEngine((current) => ({ ...current, state: "error", message: String(error) }));
     } finally {
@@ -128,6 +127,8 @@ export default function App() {
     try {
       setEngine(await invoke<EngineState>("stop_engine"));
       setApps([]);
+    } catch (error) {
+      setEngine((current) => ({ ...current, state: "error", message: String(error) }));
     } finally {
       setBusy(false);
     }
@@ -180,7 +181,7 @@ export default function App() {
 
   useEffect(() => {
     void refreshStatus();
-    const timer = window.setInterval(() => void refreshStatus(), 4000);
+    const timer = window.setInterval(() => void refreshStatus(), 1500);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -189,23 +190,28 @@ export default function App() {
   }, [page, engine.bootComplete]);
 
   const runtimePreparing = !engine.runtimeFound && (engine.state === "runtime_missing" || engine.state === "installing");
+  const booting = engine.state === "starting";
   const primaryLabel = runtimePreparing
     ? "PREPARANDO ANDROID..."
-    : engine.running
-      ? engine.bootComplete ? "■ PARAR ANDROID" : "■ CANCELAR BOOT"
-      : busy
-        ? "PROCESSANDO..."
-        : "▶ INICIAR ANDROID";
+    : booting
+      ? "■ CANCELAR BOOT"
+      : engine.running
+        ? "■ PARAR ANDROID"
+        : busy
+          ? "PROCESSANDO..."
+          : "▶ INICIAR ANDROID";
 
   const heroTitle = engine.bootComplete
     ? "Android pronto"
-    : engine.state === "starting"
+    : booting
       ? "Android iniciando"
-      : runtimePreparing
-        ? "Preparando ambiente Android"
-        : engine.runtimeFound
-          ? "Engine preparado"
-          : "Ambiente precisa de reparo";
+      : engine.state === "error"
+        ? "Falha ao iniciar"
+        : runtimePreparing
+          ? "Preparando ambiente Android"
+          : engine.runtimeFound
+            ? "Engine preparado"
+            : "Ambiente precisa de reparo";
 
   function renderHome() {
     return (
@@ -224,7 +230,7 @@ export default function App() {
               {runtimePreparing ? (
                 <button className="primary" disabled>PREPARANDO ANDROID...</button>
               ) : (
-                <button className="primary" onClick={() => void (engine.running ? stopEngine() : startEngine())} disabled={busy || engine.state === "acceleration_missing"}>{primaryLabel}</button>
+                <button className="primary" onClick={() => void ((engine.running || booting) ? stopEngine() : startEngine())} disabled={busy}>{primaryLabel}</button>
               )}
               {engine.state === "error" && <button className="secondary" onClick={() => void installRuntime(false)}>Reparar ambiente</button>}
             </div>
@@ -239,7 +245,7 @@ export default function App() {
         <section className="section-title"><div><p className="eyebrow">PERFIL ATUAL</p><h3>Desempenho</h3></div><span>Altere antes de iniciar</span></section>
         <div className="profiles">
           {profiles.map((item) => (
-            <button key={item.name} className={`profile-card ${profile === item.name ? "selected" : ""}`} onClick={() => chooseProfile(item.name)} disabled={engine.running}>
+            <button key={item.name} className={`profile-card ${profile === item.name ? "selected" : ""}`} onClick={() => chooseProfile(item.name)} disabled={engine.running || booting}>
               <div className="profile-top"><strong>{item.name}</strong>{profile === item.name && <span>✓</span>}</div>
               <div className="specs"><span>CPU <b>{item.cpu}</b></span><span>RAM <b>{item.ram}</b></span><span>MAX <b>{item.fps}</b></span></div>
             </button>
@@ -312,7 +318,7 @@ export default function App() {
       <>
         <PageTitle eyebrow="NOVA" title="Configurações" subtitle="Ajustes de desempenho e diagnóstico do ambiente Android." />
         <div className="panel settings-panel">
-          <div className="settings-block"><span>Perfil de desempenho</span><div className="segmented">{profiles.map((item) => <button key={item.name} className={profile === item.name ? "active" : ""} onClick={() => chooseProfile(item.name)} disabled={engine.running}>{item.name}</button>)}</div></div>
+          <div className="settings-block"><span>Perfil de desempenho</span><div className="segmented">{profiles.map((item) => <button key={item.name} className={profile === item.name ? "active" : ""} onClick={() => chooseProfile(item.name)} disabled={engine.running || booting}>{item.name}</button>)}</div></div>
           <div className="settings-block"><span>Runtime Android</span><strong>{engine.runtimeFound && engine.adbFound && engine.avdFound ? "Instalado" : "Incompleto"}</strong></div>
           <div className="settings-block"><span>ADB</span><strong>{engine.adbFound ? "Disponível" : "Ausente"}</strong></div>
           <div className="settings-block"><span>Dispositivo virtual</span><strong>{engine.avdFound ? "NOVA AVD pronto" : "Ausente"}</strong></div>
@@ -335,8 +341,8 @@ export default function App() {
           <button className={`nav-item ${page === "settings" ? "active" : ""}`} onClick={() => setPage("settings")}><span>⚙</span>Configurações</button>
         </nav>
         <div className="sidebar-bottom">
-          <div className="engine-pill"><StatusDot active={engine.bootComplete} /><div><b>Engine</b><small>{engine.bootComplete ? "Android pronto" : engine.running ? "Inicializando Android" : engine.runtimeFound ? "Runtime instalado" : "Preparando runtime"}</small></div></div>
-          <span className="version">NOVA 0.2.0 · ENGINE MVP</span>
+          <div className="engine-pill"><StatusDot active={engine.bootComplete} /><div><b>Engine</b><small>{engine.bootComplete ? "Android pronto" : booting ? "Boot em andamento" : engine.runtimeFound ? "Runtime instalado" : "Preparando runtime"}</small></div></div>
+          <span className="version">NOVA 0.3.0 · RUST BOOT ENGINE</span>
         </div>
       </aside>
 
