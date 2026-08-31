@@ -116,6 +116,59 @@ function Install-WebView2 {
   if ($p.ExitCode -ne 0) { throw "Falha ao instalar WebView2 Runtime (código $($p.ExitCode))." }
 }
 
+function Stop-NovaRuntimeProcesses {
+  Write-Host '[NOVA] Verificando processos que podem estar usando o runtime antigo...' -ForegroundColor DarkGray
+
+  $novaNames = @('nova-emulator.exe', 'NOVA Emulator.exe')
+  $targets = @()
+
+  try {
+    $targets = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+      if ($_.ProcessId -eq $PID) { return $false }
+
+      $pathMatch = $false
+      $commandMatch = $false
+      if (-not [string]::IsNullOrWhiteSpace($_.ExecutablePath)) {
+        $pathMatch = $_.ExecutablePath.StartsWith($LegacyRuntimeRoot, [System.StringComparison]::OrdinalIgnoreCase)
+      }
+      if (-not [string]::IsNullOrWhiteSpace($_.CommandLine)) {
+        $commandMatch = $_.CommandLine.IndexOf($LegacyRuntimeRoot, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+      }
+
+      $nameMatch = $novaNames -contains $_.Name
+      return $pathMatch -or $commandMatch -or $nameMatch
+    })
+  } catch {
+    Write-Host '[NOVA] Não foi possível consultar todos os processos via CIM; usando fallback por nome.' -ForegroundColor Yellow
+  }
+
+  foreach ($process in $targets) {
+    try {
+      Write-Host ("[NOVA] Fechando {0} (PID {1})..." -f $process.Name, $process.ProcessId) -ForegroundColor Yellow
+      Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+    } catch {
+      Write-Host ("[NOVA] Não consegui fechar PID {0}: {1}" -f $process.ProcessId, $_.Exception.Message) -ForegroundColor Yellow
+    }
+  }
+
+  # Fallback específico para componentes Android do NOVA caso o ExecutablePath não seja exposto pelo CIM.
+  foreach ($name in @('emulator', 'qemu-system-x86_64', 'adb')) {
+    $items = @(Get-Process -Name $name -ErrorAction SilentlyContinue)
+    foreach ($item in $items) {
+      try {
+        $exe = $null
+        try { $exe = $item.Path } catch {}
+        if ($exe -and $exe.StartsWith($LegacyRuntimeRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+          Write-Host ("[NOVA] Fechando {0} (PID {1})..." -f $item.ProcessName, $item.Id) -ForegroundColor Yellow
+          Stop-Process -Id $item.Id -Force -ErrorAction Stop
+        }
+      } catch {}
+    }
+  }
+
+  Start-Sleep -Milliseconds 900
+}
+
 function Migrate-LegacyRuntime {
   if ((Test-Path $LegacyRuntimeRoot) -and (-not (Test-Path $RuntimeRoot))) {
     Write-Step 'Migrando runtime existente para caminho compatível'
@@ -123,11 +176,24 @@ function Migrate-LegacyRuntime {
     Write-Host "       $LegacyRuntimeRoot" -ForegroundColor DarkGray
     Write-Host "    -> $RuntimeRoot" -ForegroundColor DarkGray
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $RuntimeRoot) | Out-Null
-    try {
-      Move-Item -Path $LegacyRuntimeRoot -Destination $RuntimeRoot -Force
-    } catch {
-      throw "Não foi possível migrar o runtime antigo. Feche qualquer NOVA/Emulator aberto e tente de novo. $($_.Exception.Message)"
+
+    $lastError = $null
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+      try {
+        Stop-NovaRuntimeProcesses
+        Move-Item -Path $LegacyRuntimeRoot -Destination $RuntimeRoot -Force -ErrorAction Stop
+        Write-Host '[OK] Runtime antigo migrado automaticamente.' -ForegroundColor Green
+        return
+      } catch {
+        $lastError = $_.Exception.Message
+        if ($attempt -lt 5) {
+          Write-Host ("[NOVA] Arquivos ainda ocupados. Tentativa {0}/5; aguardando para tentar novamente..." -f $attempt) -ForegroundColor Yellow
+          Start-Sleep -Seconds 2
+        }
+      }
     }
+
+    throw "Não foi possível liberar/migrar o runtime após 5 tentativas. Detalhe: $lastError"
   }
 }
 
