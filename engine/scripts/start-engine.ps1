@@ -60,8 +60,6 @@ function Repair-AvdDescriptor {
   }
 }
 
-# Native tools such as ADB legitimately write to stderr while a device is not online yet.
-# Do not let Windows PowerShell promote those messages to terminating NativeCommandError records.
 function Invoke-AdbSafe([string[]]$Arguments) {
   $oldPreference = $ErrorActionPreference
   try {
@@ -74,17 +72,15 @@ function Invoke-AdbSafe([string[]]$Arguments) {
   }
 }
 
-Repair-AvdDescriptor
-
-$settings = switch ($Profile) {
-  'eco' { @{ Cpu = 2; Ram = 2048; Gpu = 'auto' } }
-  'performance' { @{ Cpu = 4; Ram = 6144; Gpu = 'host' } }
-  default { @{ Cpu = 4; Ram = 4096; Gpu = 'host' } }
+function Read-EmulatorDetails {
+  $stderr = if (Test-Path $EmulatorStderr) { Get-Content $EmulatorStderr -Raw -ErrorAction SilentlyContinue } else { '' }
+  $stdout = if (Test-Path $EmulatorStdout) { Get-Content $EmulatorStdout -Raw -ErrorAction SilentlyContinue } else { '' }
+  $details = (($stderr + "`n" + $stdout).Trim())
+  if ([string]::IsNullOrWhiteSpace($details)) { return 'Sem saída adicional do Android Emulator.' }
+  return $details
 }
 
 function Test-DeviceOnline {
-  # `adb -s emulator-5554 get-state` prints "device not found" before the Emulator exists.
-  # `adb devices` is quiet in that normal state, so poll the device list instead.
   $result = Invoke-AdbSafe @('devices')
   if ($result.ExitCode -ne 0) { return $false }
   return [bool]($result.Text -match '(?m)^emulator-5554\s+device\s*$')
@@ -96,12 +92,47 @@ function Test-BootComplete {
   return ($result.ExitCode -eq 0 -and $result.Text.Trim() -eq '1')
 }
 
+function Test-EmulatorChildRunning {
+  foreach ($name in @('qemu-system-x86_64','emulator')) {
+    $items = @(Get-Process -Name $name -ErrorAction SilentlyContinue)
+    foreach ($item in $items) {
+      try {
+        $path = $item.Path
+        if ($path -and $path.StartsWith($RuntimeRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+          return $true
+        }
+      } catch {}
+    }
+  }
+  return $false
+}
+
+Repair-AvdDescriptor
+
+# Confirm that the Android Emulator can actually see the migrated AVD before booting it.
+$oldPreference = $ErrorActionPreference
+try {
+  $ErrorActionPreference = 'SilentlyContinue'
+  $knownAvds = (& $Emulator -list-avds 2>$null | Out-String)
+} finally {
+  $ErrorActionPreference = $oldPreference
+}
+if ($knownAvds -notmatch '(?m)^NOVA\s*$') {
+  throw "O Android Emulator não reconheceu o AVD NOVA em $AvdHome. Use Reparar ambiente para recriar o dispositivo virtual."
+}
+
+$settings = switch ($Profile) {
+  'eco' { @{ Cpu = 2; Ram = 2048; Gpu = 'auto' } }
+  'performance' { @{ Cpu = 4; Ram = 6144; Gpu = 'host' } }
+  default { @{ Cpu = 4; Ram = 4096; Gpu = 'host' } }
+}
+
 if (Test-BootComplete) {
   Write-Host '[NOVA] Android já está iniciado e pronto.' -ForegroundColor Green
   exit 0
 }
 
-# accel-check is diagnostic only. The actual emulator launch with -accel on is authoritative.
+# accel-check is diagnostic only. The real launch with -accel on is authoritative.
 $oldPreference = $ErrorActionPreference
 try {
   $ErrorActionPreference = 'Continue'
@@ -113,8 +144,7 @@ try {
 if ($accelExit -eq 0) {
   Write-Host '[NOVA] Aceleração detectada pelo Android Emulator.' -ForegroundColor Green
 } else {
-  Write-Host '[NOVA] accel-check foi inconclusivo. Tentando iniciar o Emulator para obter o diagnóstico real...' -ForegroundColor Yellow
-  Write-Host $accelOutput -ForegroundColor DarkGray
+  Write-Host '[NOVA] accel-check inconclusivo. O boot real será usado como teste.' -ForegroundColor Yellow
 }
 
 $null = Invoke-AdbSafe @('start-server')
@@ -126,6 +156,7 @@ $args = @(
   '-gpu', $settings.Gpu,
   '-cores', $settings.Cpu,
   '-memory', $settings.Ram,
+  '-no-metrics',
   '-no-boot-anim',
   '-no-audio',
   '-netdelay', 'none',
@@ -138,26 +169,41 @@ Remove-Item $EmulatorStdout,$EmulatorStderr -Force -ErrorAction SilentlyContinue
 Write-Host "[NOVA] Iniciando perfil ${Profile}: $($settings.Cpu) cores / $($settings.Ram) MB / GPU $($settings.Gpu)" -ForegroundColor Cyan
 
 $process = Start-Process -FilePath $Emulator -ArgumentList $args -WorkingDirectory $RuntimeRoot -RedirectStandardOutput $EmulatorStdout -RedirectStandardError $EmulatorStderr -PassThru
-"PID=$($process.Id)" | Add-Content $LogFile -Encoding UTF8
+"launcher_pid=$($process.Id)" | Add-Content $LogFile -Encoding UTF8
 
-Write-Host '[NOVA] Aguardando ADB...' -ForegroundColor DarkGray
+Write-Host '[NOVA] Aguardando Android/ADB...' -ForegroundColor DarkGray
 $deadline = (Get-Date).AddSeconds(90)
+$launcherExitSeenAt = $null
+
 while ((Get-Date) -lt $deadline) {
-  if ($process.HasExited) {
-    $stderr = if (Test-Path $EmulatorStderr) { Get-Content $EmulatorStderr -Raw -ErrorAction SilentlyContinue } else { '' }
-    $stdout = if (Test-Path $EmulatorStdout) { Get-Content $EmulatorStdout -Raw -ErrorAction SilentlyContinue } else { '' }
-    $details = (($stderr + "`n" + $stdout).Trim())
-    if ([string]::IsNullOrWhiteSpace($details)) { $details = 'Sem saída adicional do Android Emulator.' }
-    $details | Add-Content $LogFile -Encoding UTF8
-    throw "Android Emulator encerrou durante a inicialização (código $($process.ExitCode)). $details"
-  }
   if (Test-DeviceOnline) { break }
+
+  $process.Refresh()
+  if ($process.HasExited) {
+    if ($null -eq $launcherExitSeenAt) {
+      $launcherExitSeenAt = Get-Date
+      $exitCode = $null
+      try { $exitCode = $process.ExitCode } catch {}
+      "launcher_exited code=$exitCode" | Add-Content $LogFile -Encoding UTF8
+      Write-Host '[NOVA] Launcher do Emulator encerrou; aguardando possível processo QEMU filho...' -ForegroundColor DarkGray
+    }
+
+    # emulator.exe may hand off to qemu-system-x86_64.exe. Give the child/ADB time to appear.
+    $graceExpired = ((Get-Date) - $launcherExitSeenAt).TotalSeconds -ge 15
+    if ($graceExpired -and (-not (Test-EmulatorChildRunning))) {
+      $details = Read-EmulatorDetails
+      $details | Add-Content $LogFile -Encoding UTF8
+      throw "Android Emulator não permaneceu em execução. $details"
+    }
+  }
+
   Start-Sleep -Milliseconds 750
 }
 
 if (-not (Test-DeviceOnline)) {
-  $stderr = if (Test-Path $EmulatorStderr) { Get-Content $EmulatorStderr -Raw -ErrorAction SilentlyContinue } else { '' }
-  throw "Android Emulator abriu, mas o ADB não ficou online em 90 segundos. $stderr"
+  $details = Read-EmulatorDetails
+  $details | Add-Content $LogFile -Encoding UTF8
+  throw "Android Emulator foi iniciado, mas o ADB não ficou online em 90 segundos. $details"
 }
 
 Write-Host '[NOVA] ADB conectado. Aguardando Android concluir o boot...' -ForegroundColor DarkGray
