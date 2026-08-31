@@ -342,7 +342,7 @@ export default function App() {
         </nav>
         <div className="sidebar-bottom">
           <div className="engine-pill"><StatusDot active={engine.bootComplete} /><div><b>Engine</b><small>{engine.bootComplete ? "Android pronto" : booting ? "Boot em andamento" : engine.runtimeFound ? "Runtime instalado" : "Preparando runtime"}</small></div></div>
-          <span className="version">NOVA 0.3.0 · RUST BOOT ENGINE</span>
+          <span className="version">NOVA 0.3.1 · COMPAT RUNTIME</span>
         </div>
       </aside>
 
