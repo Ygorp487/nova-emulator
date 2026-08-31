@@ -3,7 +3,8 @@ use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
     process::Command,
-    sync::OnceLock,
+    sync::{Mutex, OnceLock},
+    thread,
 };
 use tauri::Manager;
 
@@ -25,7 +26,48 @@ struct InstalledApp {
     package: String,
 }
 
+#[derive(Clone, Default)]
+struct LaunchStatus {
+    in_progress: bool,
+    last_error: Option<String>,
+}
+
 static ACCELERATION_CACHE: OnceLock<(bool, String)> = OnceLock::new();
+static LAUNCH_STATUS: OnceLock<Mutex<LaunchStatus>> = OnceLock::new();
+
+fn launch_status() -> &'static Mutex<LaunchStatus> {
+    LAUNCH_STATUS.get_or_init(|| Mutex::new(LaunchStatus::default()))
+}
+
+fn set_launch_status(in_progress: bool, last_error: Option<String>) {
+    if let Ok(mut status) = launch_status().lock() {
+        status.in_progress = in_progress;
+        status.last_error = last_error;
+    }
+}
+
+fn launch_snapshot() -> LaunchStatus {
+    launch_status()
+        .lock()
+        .map(|status| status.clone())
+        .unwrap_or_default()
+}
+
+fn compact_output(text: String) -> String {
+    let cleaned = text
+        .replace('\r', "")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+
+    if cleaned.len() > 1800 {
+        format!("{}…", &cleaned[..1800])
+    } else {
+        cleaned
+    }
+}
 
 fn hidden_command<S: AsRef<OsStr>>(program: S) -> Command {
     let mut command = Command::new(program);
@@ -105,7 +147,10 @@ fn acceleration_probe(runtime: &Path) -> (bool, String) {
                         if ok {
                             "aceleração disponível · accel-check OK".into()
                         } else {
-                            format!("accel-check inconclusivo · exit {} · o NOVA testará no início real", output.status.code().unwrap_or(-1))
+                            format!(
+                                "accel-check inconclusivo · exit {} · o NOVA testará no início real",
+                                output.status.code().unwrap_or(-1)
+                            )
                         }
                     } else if ok {
                         format!("OK · {normalized}")
@@ -114,7 +159,10 @@ fn acceleration_probe(runtime: &Path) -> (bool, String) {
                     };
                     (ok, message)
                 }
-                Err(error) => (false, format!("accel-check indisponível: {error} · o NOVA testará no início real")),
+                Err(error) => (
+                    false,
+                    format!("accel-check indisponível: {error} · o NOVA testará no início real"),
+                ),
             }
         })
         .clone()
@@ -155,7 +203,11 @@ fn adb_result(runtime: &Path, args: &[&str]) -> Result<String, String> {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
     if output.status.success() {
-        if stdout.is_empty() { Ok(stderr) } else { Ok(stdout) }
+        if stdout.is_empty() {
+            Ok(stderr)
+        } else {
+            Ok(stdout)
+        }
     } else {
         Err(if stderr.is_empty() { stdout } else { stderr })
     }
@@ -197,6 +249,7 @@ fn collect_state() -> EngineState {
     let (acceleration_ok, acceleration) = acceleration_probe(&runtime);
 
     if running && boot_complete {
+        set_launch_status(false, None);
         let version = android_version(&runtime).unwrap_or_else(|| "Android".into());
         return EngineState {
             state: "running".into(),
@@ -227,6 +280,33 @@ fn collect_state() -> EngineState {
         return EngineState {
             state: "runtime_missing".into(),
             message: "Runtime Android ainda não está pronto. Execute o preparador do NOVA para concluir o ambiente.".into(),
+            runtime_found,
+            adb_found,
+            avd_found,
+            running,
+            boot_complete,
+            acceleration,
+        };
+    }
+
+    let launch = launch_snapshot();
+    if launch.in_progress {
+        return EngineState {
+            state: "starting".into(),
+            message: "Iniciando o Android Emulator e aguardando conexão ADB...".into(),
+            runtime_found,
+            adb_found,
+            avd_found,
+            running,
+            boot_complete,
+            acceleration,
+        };
+    }
+
+    if let Some(error) = launch.last_error {
+        return EngineState {
+            state: "error".into(),
+            message: format!("Falha ao iniciar Android: {error}"),
             runtime_found,
             adb_found,
             avd_found,
@@ -311,11 +391,16 @@ fn install_runtime(app: tauri::AppHandle) -> EngineState {
 fn start_engine(app: tauri::AppHandle, profile: String) -> EngineState {
     let runtime = runtime_root();
     let current = collect_state();
-    if current.state != "ready" && current.state != "running" && current.state != "starting" {
+
+    if !current.runtime_found || !current.adb_found || !current.avd_found {
         return current;
     }
 
-    if current.boot_complete {
+    if current.boot_complete || current.running {
+        return current;
+    }
+
+    if launch_snapshot().in_progress {
         return current;
     }
 
@@ -333,42 +418,65 @@ fn start_engine(app: tauri::AppHandle, profile: String) -> EngineState {
         };
     }
 
-    let mut command = hidden_command("powershell.exe");
-    match command
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-        .arg(script)
-        .arg("-Profile")
-        .arg(profile)
-        .arg("-RuntimeRoot")
-        .arg(&runtime)
-        .spawn()
-    {
-        Ok(_) => EngineState {
-            state: "starting".into(),
-            message: "Android está iniciando. O NOVA vai acompanhar o ADB até o boot terminar.".into(),
-            runtime_found: true,
-            adb_found: true,
-            avd_found: true,
-            running: false,
-            boot_complete: false,
-            acceleration: acceleration_status(&runtime),
-        },
-        Err(error) => EngineState {
-            state: "error".into(),
-            message: format!("Falha ao iniciar engine: {error}"),
-            runtime_found: true,
-            adb_found: true,
-            avd_found: true,
-            running: false,
-            boot_complete: false,
-            acceleration: acceleration_status(&runtime),
-        },
+    set_launch_status(true, None);
+    let thread_script = script.clone();
+    let thread_runtime = runtime.clone();
+    let thread_profile = profile.clone();
+
+    thread::spawn(move || {
+        let mut command = hidden_command("powershell.exe");
+        let result = command
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(thread_script)
+            .arg("-Profile")
+            .arg(thread_profile)
+            .arg("-RuntimeRoot")
+            .arg(thread_runtime)
+            .output();
+
+        match result {
+            Ok(output) if output.status.success() => {
+                set_launch_status(false, None);
+            }
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                let details = compact_output(format!("{stderr}\n{stdout}"));
+                let message = if details.is_empty() {
+                    format!(
+                        "processo de inicialização encerrou com código {}",
+                        output.status.code().unwrap_or(-1)
+                    )
+                } else {
+                    details
+                };
+                set_launch_status(false, Some(message));
+            }
+            Err(error) => {
+                set_launch_status(
+                    false,
+                    Some(format!("não foi possível executar o inicializador: {error}")),
+                );
+            }
+        }
+    });
+
+    EngineState {
+        state: "starting".into(),
+        message: "Android está iniciando. O NOVA acompanhará o processo e mostrará qualquer erro real aqui.".into(),
+        runtime_found: true,
+        adb_found: true,
+        avd_found: true,
+        running: false,
+        boot_complete: false,
+        acceleration: acceleration_status(&runtime),
     }
 }
 
 #[tauri::command]
 fn stop_engine() -> EngineState {
     let runtime = runtime_root();
+    set_launch_status(false, None);
     let adb = adb_path(&runtime);
     if adb.exists() {
         let mut command = hidden_command(&adb);
@@ -395,7 +503,9 @@ fn list_apps() -> Result<Vec<InstalledApp>, String> {
         .lines()
         .filter_map(|line| line.trim().strip_prefix("package:"))
         .filter(|package| !package.is_empty())
-        .map(|package| InstalledApp { package: package.to_string() })
+        .map(|package| InstalledApp {
+            package: package.to_string(),
+        })
         .collect();
     apps.sort_by(|a, b| a.package.cmp(&b.package));
     Ok(apps)
@@ -426,7 +536,12 @@ fn install_apk() -> Result<String, String> {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
     if output.status.success() && stdout.to_ascii_lowercase().contains("success") {
-        Ok(format!("APK instalado com sucesso: {}", file.file_name().and_then(|n| n.to_str()).unwrap_or("arquivo.apk")))
+        Ok(format!(
+            "APK instalado com sucesso: {}",
+            file.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("arquivo.apk")
+        ))
     } else {
         Err(if stderr.is_empty() { stdout } else { stderr })
     }
