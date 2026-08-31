@@ -7,7 +7,8 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $TempRoot = Join-Path $env:TEMP 'NOVA-Emulator-Setup'
-$RuntimeRoot = Join-Path $env:LOCALAPPDATA 'NOVA Emulator\engine\runtime'
+$RuntimeRoot = Join-Path $env:LOCALAPPDATA 'NOVA\Runtime'
+$LegacyRuntimeRoot = Join-Path $env:LOCALAPPDATA 'NOVA Emulator\engine\runtime'
 New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
 
 function Write-Step([string]$Text) {
@@ -115,6 +116,21 @@ function Install-WebView2 {
   if ($p.ExitCode -ne 0) { throw "Falha ao instalar WebView2 Runtime (código $($p.ExitCode))." }
 }
 
+function Migrate-LegacyRuntime {
+  if ((Test-Path $LegacyRuntimeRoot) -and (-not (Test-Path $RuntimeRoot))) {
+    Write-Step 'Migrando runtime existente para caminho compatível'
+    Write-Host "[NOVA] Movendo runtime sem baixar novamente:" -ForegroundColor Yellow
+    Write-Host "       $LegacyRuntimeRoot" -ForegroundColor DarkGray
+    Write-Host "    -> $RuntimeRoot" -ForegroundColor DarkGray
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $RuntimeRoot) | Out-Null
+    try {
+      Move-Item -Path $LegacyRuntimeRoot -Destination $RuntimeRoot -Force
+    } catch {
+      throw "Não foi possível migrar o runtime antigo. Feche qualquer NOVA/Emulator aberto e tente de novo. $($_.Exception.Message)"
+    }
+  }
+}
+
 function Test-NovaRuntime {
   $emulator = Join-Path $RuntimeRoot 'sdk\emulator\emulator.exe'
   $adb = Join-Path $RuntimeRoot 'sdk\platform-tools\adb.exe'
@@ -123,6 +139,8 @@ function Test-NovaRuntime {
 }
 
 function Ensure-NovaRuntime {
+  Migrate-LegacyRuntime
+
   if (Test-NovaRuntime) {
     Write-Host '[OK] Runtime Android do NOVA já está instalado.' -ForegroundColor Green
     return
@@ -167,7 +185,6 @@ Write-Host "[OK] Rust:  $(rustc --version)" -ForegroundColor Green
 Write-Host '[OK] C++ Build Tools detectado' -ForegroundColor Green
 if (Test-WebView2) { Write-Host '[OK] WebView2 detectado' -ForegroundColor Green }
 
-# Prepare/run/build now all validate the Android runtime too.
 Ensure-NovaRuntime
 
 Push-Location $RepoRoot
@@ -211,7 +228,7 @@ try {
 
     Write-Host "`n[NOVA] EXE GERADO COM SUCESSO:" -ForegroundColor Green
     Write-Host $final -ForegroundColor White
-    Write-Host '[NOVA] Runtime Android também está pronto neste computador.' -ForegroundColor Green
+    Write-Host "[NOVA] Runtime Android: $RuntimeRoot" -ForegroundColor Green
     Start-Process explorer.exe -ArgumentList "/select,`"$final`""
   }
 } finally {
