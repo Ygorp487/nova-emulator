@@ -6,25 +6,44 @@ echo =============================================
 echo   NOVA EMULATOR - INSTALAR E ABRIR
 echo =============================================
 echo.
-echo Este assistente vai verificar e instalar automaticamente:
-echo - Node.js LTS / npm
-echo - Rust / Cargo
-echo - Visual C++ Build Tools
-echo - WebView2 Runtime
-echo - Runtime Android NOVA (Emulator/QEMU + ADB + AVD)
-echo - Dependencias npm do NOVA
+echo Este assistente usa somente a versao RELEASE do NOVA.
+echo Ele verifica dependencias, runtime Android e gera o instalador
+echo sem abrir o Tauri/Vite em modo de desenvolvimento.
 echo.
-echo Na primeira instalacao do Android, as licencas oficiais do SDK
-echo serao exibidas no terminal para voce aceitar.
-echo.
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\bootstrap-windows.ps1" -Mode run
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\bootstrap-windows.ps1" -Mode build
 set "EXITCODE=%ERRORLEVEL%"
 if not "%EXITCODE%"=="0" (
   echo.
-  echo [NOVA] O processo terminou com erro %EXITCODE%.
-  echo O log do runtime fica em:
-  echo %%LOCALAPPDATA%%\NOVA Emulator\engine\runtime\logs\runtime-install.log
-  echo Tire uma foto desta tela e envie para o ChatGPT se precisar.
+  echo [NOVA] A preparacao terminou com erro %EXITCODE%.
+  echo Log do runtime:
+  echo %%LOCALAPPDATA%%\NOVA\Runtime\logs\runtime-install.log
   pause
+  exit /b %EXITCODE%
 )
-exit /b %EXITCODE%
+
+set "SETUP=%~dp0NOVA-BUILD\NOVA-Setup.exe"
+if not exist "%SETUP%" (
+  echo [NOVA] Instalador nao encontrado: %SETUP%
+  pause
+  exit /b 1
+)
+
+echo.
+echo [NOVA] Abrindo instalador RELEASE...
+start "" /wait "%SETUP%"
+
+set "APP1=%LOCALAPPDATA%\NOVA Emulator\NOVA Emulator.exe"
+set "APP2=%LOCALAPPDATA%\Programs\NOVA Emulator\NOVA Emulator.exe"
+set "APP3=%PROGRAMFILES%\NOVA Emulator\NOVA Emulator.exe"
+set "APP4=%PROGRAMFILES(X86)%\NOVA Emulator\NOVA Emulator.exe"
+
+if exist "%APP1%" start "" "%APP1%" & exit /b 0
+if exist "%APP2%" start "" "%APP2%" & exit /b 0
+if exist "%APP3%" start "" "%APP3%" & exit /b 0
+if exist "%APP4%" start "" "%APP4%" & exit /b 0
+
+echo.
+echo [NOVA] Instalacao concluida. Se o NOVA nao abriu automaticamente,
+echo abra "NOVA Emulator" pelo Menu Iniciar.
+pause
+exit /b 0
