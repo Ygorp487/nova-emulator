@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#111214" />
+  <meta name="description" content="Nexo — comunicação P2P com chamadas e compartilhamento de tela em baixa latência." />
+  <title>Nexo</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <aside class="rail" aria-label="Atalhos do Nexo">
+      <button class="brand" id="homeBtn" aria-label="Início">N</button>
+      <div class="rail-spacer"></div>
+      <button class="rail-btn active" data-view="calls" title="Chamadas">◉</button>
+      <button class="rail-btn" data-view="chat" title="Chat">✦</button>
+      <button class="rail-btn" data-view="settings" title="Configurações">⚙</button>
+    </aside>
+    <aside class="sidebar">
+      <div class="sidebar-head"><div><div class="eyebrow">NEXO</div><strong>Central</strong></div><span class="status-dot" id="appStatusDot"></span></div>
+      <div class="sidebar-section"><label class="field-label" for="displayName">Seu nome</label><input id="displayName" class="field" maxlength="32" placeholder="Digite seu nome" autocomplete="nickname" /></div>
+      <div class="sidebar-section">
+        <div class="section-title">Sala</div>
+        <button id="createRoomBtn" class="primary-btn">Criar nova sala</button>
+        <div class="join-row"><input id="roomCodeInput" class="field" maxlength="64" placeholder="Código da sala" autocomplete="off" /><button id="joinRoomBtn" class="icon-btn" title="Entrar">→</button></div>
+      </div>
+      <div class="sidebar-section room-card hidden" id="roomCard">
+        <div class="section-title">Sala atual</div><div class="room-code" id="roomCodeText">—</div>
+        <div class="room-actions"><button id="copyInviteBtn" class="ghost-btn">Copiar convite</button><button id="leaveRoomBtn" class="danger-ghost-btn">Sair</button></div>
+      </div>
+      <div class="sidebar-bottom"><div class="profile-row"><div class="avatar" id="avatarLetter">N</div><div class="profile-copy"><strong id="profileName">Convidado</strong><span id="profileState">Desconectado</span></div></div></div>
+    </aside>
+    <main class="main-panel">
+      <header class="topbar"><div><h1 id="mainTitle">Chamadas</h1><p id="mainSubtitle">Crie ou entre em uma sala para iniciar.</p></div><span class="quality-pill" id="connectionBadge">offline</span></header>
+      <section id="callsView" class="view active-view">
+        <div class="empty-state" id="callEmptyState"><div class="empty-icon">◉</div><h2>Pronto para conectar</h2><p>Crie uma sala ou use um código de convite. A chamada usa o motor WebRTC do VDO.Ninja por baixo.</p><button id="emptyCreateBtn" class="primary-btn compact">Criar sala</button></div>
+        <div class="call-stage hidden" id="callStage">
+          <iframe id="vdoFrame" title="Nexo realtime engine" allow="autoplay; camera; microphone; display-capture; fullscreen; clipboard-read; clipboard-write" allowfullscreen></iframe>
+          <div class="engine-loading" id="engineLoading"><div class="spinner"></div><span>Conectando ao motor realtime…</span></div>
+        </div>
+        <div class="call-toolbar hidden" id="callToolbar" role="toolbar">
+          <button class="tool-btn active" id="micBtn" aria-pressed="true" title="Microfone">🎙</button>
+          <button class="tool-btn active" id="cameraBtn" aria-pressed="true" title="Câmera">📷</button>
+          <button class="tool-btn" id="screenBtn" aria-pressed="false" title="Compartilhar tela">▣</button>
+          <button class="tool-btn" id="statsBtn" title="Estatísticas">⌁</button>
+          <button class="tool-btn danger" id="hangupBtn" title="Encerrar">☎</button>
+        </div>
+      </section>
+      <section id="chatView" class="view hidden"><div class="chat-wrap"><div class="messages" id="messages"><div class="system-message">Entre em uma sala para usar o chat P2P.</div></div><form class="composer" id="chatForm"><input id="chatInput" class="field" maxlength="500" placeholder="Mensagem para a sala" disabled /><button class="primary-btn compact" id="sendChatBtn" type="submit" disabled>Enviar</button></form></div></section>
+      <section id="settingsView" class="view hidden"><div class="settings-card"><h2>Qualidade da chamada</h2><p>O bitrate é aplicado ao motor realtime sem recriar a sala.</p><label class="field-label" for="bitrateSelect">Perfil</label><select id="bitrateSelect" class="field select-field"><option value="-1">Automático</option><option value="1200">Economia — 1.2 Mbps</option><option value="2500">Equilibrado — 2.5 Mbps</option><option value="5000">Alta — 5 Mbps</option><option value="8000">Máxima — 8 Mbps</option></select><div class="settings-separator"></div><h3>Diagnóstico</h3><pre id="statsOutput">Sem dados de conexão.</pre></div></section>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="./app.js" defer></script>
+</body>
+</html>
